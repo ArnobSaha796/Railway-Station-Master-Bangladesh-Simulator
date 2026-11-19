@@ -1,0 +1,8 @@
+{
+  "name": "Railway Station Master: Bangladesh Simulator",
+  "description": "A colorful 3D railway station management simulation game set at Shaplapur Junction, a fictional Bangladeshi railway station.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
