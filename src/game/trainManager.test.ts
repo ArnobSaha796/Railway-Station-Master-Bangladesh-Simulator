@@ -145,3 +145,33 @@ test('Bangla announcement generator formats arrival, delay, and safety phrases a
   const safetyText = buildTrainBanglaAnnouncement(intercity, 'safety');
   assert.ok(safetyText.includes('হলুদ লাইন অতিক্রম করবেন না'));
 });
+
+test('continuous day-to-night clock handles midnight rollover and preserves time into next day', () => {
+  let sim = { ...createInitialSimState(), gameMinutes: 23 * 60 + 50 };
+  let trainState = createInitialTrainSimulation(1);
+
+  // Schedule a train to arrive just after midnight (00:05 AM) and mark all others Departed
+  trainState = {
+    ...trainState,
+    trains: trainState.trains.map((t, idx) =>
+      idx === 0
+        ? { ...t, status: 'Scheduled', scheduledArrivalMin: 5, delayMinutes: 0, delayAnnounced: false }
+        : { ...t, status: 'Departed' },
+    ),
+  };
+
+  // Advance clock past midnight to 00:02 AM (within 4-min approach window of 00:05 AM)
+  sim = { ...sim, gameMinutes: 2 };
+  const stepMidnight = stepTrainSimulation(sim, trainState, 0.1, 10000);
+  assert.equal(stepMidnight.trainState.trains[0].status, 'Approaching');
+
+  // Once all trains depart at 22:30 (night), rolling over to Day 2 preserves 22:30 instead of snapping to Dawn
+  const nightSim = { ...createInitialSimState(), gameMinutes: 22 * 60 + 30 };
+  const allDone = {
+    ...trainState,
+    trains: trainState.trains.map((t) => ({ ...t, status: 'Departed' as const })),
+  };
+  const nextDayStep = stepTrainSimulation(nightSim, allDone, 0.1, 20000);
+  assert.equal(nextDayStep.events.dayAdvancedTo, 2);
+  assert.equal(nextDayStep.simState.gameMinutes, 22 * 60 + 30);
+});

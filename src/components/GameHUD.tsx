@@ -1,6 +1,5 @@
 import {
   Building2,
-  Clock3,
   CloudRain,
   Eye,
   Megaphone,
@@ -25,8 +24,6 @@ interface GameHUDProps {
   isTouchMode: boolean;
   onToggleMute: () => void;
   onToggleCameraMode: () => void;
-  onToggleWeather: () => void;
-  onCycleTimeOfDay: () => void;
   onOpenAudioMixer: () => void;
   onOpenTrainDashboard: () => void;
   onOpenUpgradeDashboard: () => void;
@@ -57,8 +54,6 @@ export function GameHUD({
   isTouchMode,
   onToggleMute,
   onToggleCameraMode,
-  onToggleWeather,
-  onCycleTimeOfDay,
   onOpenAudioMixer,
   onOpenTrainDashboard,
   onOpenUpgradeDashboard,
@@ -202,6 +197,19 @@ export function GameHUD({
                 <span aria-hidden="true">·</span>
                 <span data-testid="hud-time">
                   {hud.timeFormatted} <span className="hidden sm:inline">({hud.dayPeriodLabel})</span>
+                </span>
+                <span aria-hidden="true">·</span>
+                <span
+                  data-testid="hud-weather-status"
+                  className="inline-flex items-center gap-1 text-[#dfd5bc]"
+                  title="Automatic Day/Night & Weather Cycle"
+                >
+                  {weather === 'rain' ? (
+                    <CloudRain className="w-3 h-3 text-[#7ec8f2]" aria-hidden="true" />
+                  ) : (
+                    <Sun className="w-3 h-3 text-[#f5c756]" aria-hidden="true" />
+                  )}
+                  <span>{weather === 'rain' ? 'Monsoon' : 'Clear'}</span>
                 </span>
                 <span aria-hidden="true">·</span>
                 <span data-testid="hud-reputation">Rep {hud.reputation}%</span>
@@ -426,40 +434,6 @@ export function GameHUD({
               <button
                 type="button"
                 tabIndex={-1}
-                data-testid="cycle-time-btn"
-                aria-label="Cycle time of day (Dawn, Noon, Golden Dusk, Night)"
-                onClick={(e) => {
-                  e.currentTarget.blur();
-                  onCycleTimeOfDay();
-                }}
-                className="w-10 h-10 rounded-lg border border-[#e8b84b]/40 flex items-center justify-center text-[#fbf4e2] hover:bg-[#1e4a35] active:scale-95 transition-transform cursor-pointer"
-                style={{ backgroundColor: 'rgba(18, 43, 31, 0.92)' }}
-              >
-                <Clock3 className="w-4 h-4 text-[#f5c756]" />
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
-                data-testid="weather-toggle-btn"
-                aria-label={weather === 'rain' ? 'Switch to clear weather' : 'Switch to monsoon rain'}
-                onClick={(e) => {
-                  e.currentTarget.blur();
-                  onToggleWeather();
-                }}
-                className="w-10 h-10 rounded-lg border border-[#e8b84b]/40 flex items-center justify-center text-[#fbf4e2] hover:bg-[#1e4a35] active:scale-95 transition-transform cursor-pointer"
-                style={{ backgroundColor: 'rgba(18, 43, 31, 0.92)' }}
-              >
-                {weather === 'rain' ? (
-                  <CloudRain className="w-4 h-4 text-[#7ec8f2]" />
-                ) : (
-                  <Sun className="w-4 h-4 text-[#f5c756]" />
-                )}
-              </button>
-
-              <button
-                type="button"
-                tabIndex={-1}
                 data-testid="audio-mixer-btn"
                 aria-label="Open audio volume mixer"
                 onClick={(e) => {
@@ -590,7 +564,7 @@ export function GameHUD({
           {!isTouchMode && (
             <span className="hidden md:inline text-[#cbbd98]">
               {' '}
-              · WASD Move · T Trains · U Upgrade · G Security · L Time · V Cam · E Interact ·{' '}
+              · WASD Move · T Trains · U Upgrade · G Security · V Cam · E Interact ·{' '}
               {pointerLocked ? 'ESC Unlock' : 'Click Lock Look'}
             </span>
           )}

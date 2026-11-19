@@ -1,4 +1,4 @@
-import { Building2, FolderOpen, Save, ShieldAlert, SlidersHorizontal, SunMoon, TrainFront } from 'lucide-react';
+import { Building2, FolderOpen, Save, ShieldAlert, SlidersHorizontal, TrainFront } from 'lucide-react';
 import type { CameraMode, TouchControlsMode, WeatherMode } from '../game/types';
 
 interface PauseModalProps {
@@ -8,12 +8,11 @@ interface PauseModalProps {
   reputation: number;
   cameraMode: CameraMode;
   weather: WeatherMode;
+  dayPeriodLabel: string;
   touchMode: TouchControlsMode;
   hasSavedShift: boolean;
   saveFeedback: string | null;
   onChangeCameraMode: (mode: CameraMode) => void;
-  onChangeWeather: (weather: WeatherMode) => void;
-  onCycleTimeOfDay: () => void;
   onChangeTouchMode: (mode: TouchControlsMode) => void;
   onOpenAudioMixer: () => void;
   onOpenTrainDashboard: () => void;
@@ -33,12 +32,11 @@ export function PauseModal({
   reputation,
   cameraMode,
   weather,
+  dayPeriodLabel,
   touchMode,
   hasSavedShift,
   saveFeedback,
   onChangeCameraMode,
-  onChangeWeather,
-  onCycleTimeOfDay,
   onChangeTouchMode,
   onOpenAudioMixer,
   onOpenTrainDashboard,
@@ -112,27 +110,9 @@ export function PauseModal({
           </div>
 
           <div>
-            <div className="text-xs font-medium text-[#d4c6a3] mb-1.5">Weather</div>
-            <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-[#0d2117]">
-              {(
-                [
-                  { id: 'clear', label: 'Clear Sky' },
-                  { id: 'rain', label: 'Monsoon' },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => onChangeWeather(opt.id)}
-                  className={`py-1.5 text-[11px] font-semibold rounded-md cursor-pointer transition-colors ${
-                    weather === opt.id
-                      ? 'bg-[#e8b84b] text-[#14241b]'
-                      : 'text-[#dfd5bc] hover:text-white'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div className="text-xs font-medium text-[#d4c6a3] mb-1.5">Atmosphere (Auto)</div>
+            <div className="rounded-lg bg-[#0d2117] px-3 py-2 border border-[#e8b84b]/20 text-[11px] font-semibold text-[#dfd5bc] text-center">
+              {dayPeriodLabel} · {weather === 'rain' ? 'Monsoon Rain' : 'Clear Sky'}
             </div>
           </div>
         </div>
@@ -193,15 +173,6 @@ export function PauseModal({
           >
             <ShieldAlert className="w-4 h-4 text-[#7dd3fc]" />
             <span>Security &amp; Emergency Center [G]</span>
-          </button>
-          <button
-            type="button"
-            data-testid="pause-cycle-time-btn"
-            onClick={onCycleTimeOfDay}
-            className="w-full py-2.5 rounded-lg bg-[#1d4431] hover:bg-[#25573f] text-[#fbf4e2] font-semibold text-sm border border-[#e8b84b]/30 flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <SunMoon className="w-4 h-4 text-[#f5c756]" />
-            <span>Cycle Time of Day [L]</span>
           </button>
           <button
             type="button"

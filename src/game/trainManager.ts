@@ -499,7 +499,7 @@ const DAILY_ROSTER: readonly DailySlotTemplate[] = [
     origin: 'Sirajganj',
     destination: 'Narayanganj',
     destinationBn: 'নারায়ণগঞ্জ',
-    arrivalMin: 7 * 60 + 44,
+    arrivalMin: 8 * 60 + 25,
     dwellMin: 8,
     delayMinutes: 0,
     direction: 1,
@@ -512,7 +512,7 @@ const DAILY_ROSTER: readonly DailySlotTemplate[] = [
     origin: 'Dhaka Cantt',
     destination: 'Kolkata',
     destinationBn: 'কলকাতা',
-    arrivalMin: 7 * 60 + 58,
+    arrivalMin: 9 * 60 + 45,
     dwellMin: 12,
     delayMinutes: 0,
     direction: -1,
@@ -525,7 +525,7 @@ const DAILY_ROSTER: readonly DailySlotTemplate[] = [
     origin: 'Kamalapur ICD',
     destination: 'Chattogram Port',
     destinationBn: 'চট্টগ্রাম বন্দর',
-    arrivalMin: 8 * 60 + 16,
+    arrivalMin: 11 * 60 + 30,
     dwellMin: 9,
     delayMinutes: 5,
     direction: 1,
@@ -538,7 +538,7 @@ const DAILY_ROSTER: readonly DailySlotTemplate[] = [
     origin: 'Bogura',
     destination: 'Mymensingh',
     destinationBn: 'ময়মনসিংহ',
-    arrivalMin: 8 * 60 + 34,
+    arrivalMin: 13 * 60 + 35,
     dwellMin: 11,
     delayMinutes: 0,
     direction: -1,
@@ -551,7 +551,7 @@ const DAILY_ROSTER: readonly DailySlotTemplate[] = [
     origin: 'Dewanganj',
     destination: 'Dhaka',
     destinationBn: 'ঢাকা',
-    arrivalMin: 9 * 60 + 0,
+    arrivalMin: 15 * 60 + 45,
     dwellMin: 12,
     delayMinutes: 15,
     direction: 1,
@@ -564,7 +564,7 @@ const DAILY_ROSTER: readonly DailySlotTemplate[] = [
     origin: 'Bhairab',
     destination: 'Dhaka',
     destinationBn: 'ঢাকা',
-    arrivalMin: 9 * 60 + 25,
+    arrivalMin: 17 * 60 + 45,
     dwellMin: 9,
     delayMinutes: 0,
     direction: -1,
@@ -577,7 +577,7 @@ const DAILY_ROSTER: readonly DailySlotTemplate[] = [
     origin: 'Khulna',
     destination: 'Kolkata',
     destinationBn: 'কলকাতা',
-    arrivalMin: 10 * 60 + 0,
+    arrivalMin: 19 * 60 + 45,
     dwellMin: 12,
     delayMinutes: 0,
     direction: -1,
@@ -645,12 +645,13 @@ function buildTrainFromTemplate(
   safeDay: number,
   shiftMinutes: number,
   anchorDayOne: boolean,
+  startMinutes = 7 * 60 + 15,
 ): ManagedTrain {
   const spec = TRAIN_CATEGORY_SPECS[tpl.category];
   const baseArrival =
     anchorDayOne
       ? tpl.arrivalMin
-      : 7 * 60 + 10 + idx * 17 + ((idx + safeDay) % 2) * 3 + shiftMinutes;
+      : (((startMinutes + idx * 72 + ((idx + safeDay) % 2) * 8 + shiftMinutes) % 1440) + 1440) % 1440;
 
   const variedDelay =
     anchorDayOne
@@ -740,7 +741,11 @@ function buildTrainFromTemplate(
   return baseTrain;
 }
 
-export function generateDailySchedule(dayNumber: number, unlockedTracks = 2): ManagedTrain[] {
+export function generateDailySchedule(
+  dayNumber: number,
+  unlockedTracks = 2,
+  startMinutes = 7 * 60 + 15,
+): ManagedTrain[] {
   const safeDay = Math.max(1, Math.floor(dayNumber));
   const rotation = (safeDay - 1) % DAILY_ROSTER.length;
   const shiftMinutes = ((safeDay - 1) % 3) * 6;
@@ -756,7 +761,14 @@ export function generateDailySchedule(dayNumber: number, unlockedTracks = 2): Ma
   const combined = [...baseOrdered, ...EXPANSION_ROSTER.slice(0, extraCount)];
 
   return combined.map((tpl, idx) =>
-    buildTrainFromTemplate(tpl, idx, safeDay, shiftMinutes, safeDay === 1 || idx === 0 || idx === 1),
+    buildTrainFromTemplate(
+      tpl,
+      idx,
+      safeDay,
+      shiftMinutes,
+      safeDay === 1 || idx === 0 || idx === 1,
+      startMinutes,
+    ),
   );
 }
 
@@ -1826,17 +1838,21 @@ export function stepTrainSimulation(
     operationalEvent: t.operationalEvent ? { ...t.operationalEvent } : null,
   }));
 
-  // 1. Activate scheduled/delayed trains as their arrival window nears
+  // 1. Activate scheduled/delayed trains as their arrival window nears (midnight-safe circular clock check)
+  const isCircularTimeReached = (nowMin: number, targetMin: number): boolean => {
+    const diff = (((nowMin - targetMin) % 1440) + 1440) % 1440;
+    return diff < 720;
+  };
   for (const t of trains) {
-    const effectiveArrival = t.scheduledArrivalMin + t.delayMinutes;
+    const effectiveArrival = (t.scheduledArrivalMin + t.delayMinutes) % 1440;
 
     if (t.status === 'Scheduled' || t.status === 'Delayed') {
-      if (t.delayMinutes > 0 && !t.delayAnnounced && gameMinutes >= t.scheduledArrivalMin - 6) {
+      if (t.delayMinutes > 0 && !t.delayAnnounced && isCircularTimeReached(gameMinutes, t.scheduledArrivalMin - 6)) {
         t.delayAnnounced = true;
         newAnnouncements.push(buildTrainBanglaAnnouncement(t, 'delay'));
       }
 
-      if (gameMinutes >= effectiveArrival - 4) {
+      if (isCircularTimeReached(gameMinutes, effectiveArrival - 4)) {
         t.status = 'Approaching';
         t.x = t.direction === 1 ? -APPROACH_SPAWN_DIST : APPROACH_SPAWN_DIST;
         t.speed = t.maxSpeed * 0.65;
@@ -2050,14 +2066,14 @@ export function stepTrainSimulation(
     }
   }
 
-  // 3. Roll over to next day seamlessly once all trains have departed or gameMinutes wraps past 23:55
+  // 3. Roll over to next day seamlessly once all trains have departed without resetting continuous day/night clock
   let dayAdvancedTo: number | null = null;
   const allFinished = trains.every((t) => t.status === 'Departed');
   const unlockedTracks = Math.max(2, Math.min(6, nextSimState.unlockedTracks || trainState.unlockedTracks || 2));
   if (allFinished) {
     const nextDay = trainState.dayNumber + 1;
     dayAdvancedTo = nextDay;
-    const nextDayTrains = generateDailySchedule(nextDay, unlockedTracks);
+    const nextDayTrains = generateDailySchedule(nextDay, unlockedTracks, nextSimState.gameMinutes);
     const occ = computeTrackOccupancy(nextDayTrains);
     const resetSignals: Record<TrackId, SignalAspect> = {
       1: 'red',
@@ -2070,11 +2086,10 @@ export function stepTrainSimulation(
     nextSimState = {
       ...nextSimState,
       dayNumber: nextDay,
-      gameMinutes: 7 * 60 + 15,
       track1Signal: 'red',
       track2Signal: 'red',
       trackSignals: resetSignals,
-      lastEventMessage: `Day ${nextDay} schedule generated (${formatGameTime(7 * 60 + 15)}). Welcome to a fresh shift!`,
+      lastEventMessage: `Day ${nextDay} schedule active (${formatGameTime(nextSimState.gameMinutes)}). Welcome to a new shift!`,
       lastEventTimestamp: nowMs,
     };
     return {

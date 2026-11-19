@@ -28,6 +28,9 @@ import {
   type SavedStationShift,
 } from '../game/storage';
 import {
+  advanceGameClock,
+  type AutoWeatherState,
+  createInitialAutoWeatherState,
   createInitialSimState,
   formatGameTime,
   getDayPeriodLabel,
@@ -36,6 +39,7 @@ import {
   performStationInteraction,
   STATION_NAME_BN,
   STATION_NAME_EN,
+  stepAutoWeather,
 } from '../game/rules';
 import {
   advanceTrainDepartureSequence,
@@ -109,7 +113,6 @@ interface GameCanvasProps {
   resetSignal: number;
   interactTriggerSignal: number;
   announceSignal: number;
-  timeCycleSignal: number;
   touchInputRef: React.MutableRefObject<TouchControlInput>;
   trainActionsRef: React.MutableRefObject<TrainControlCallbacks>;
   upgradeActionsRef: React.MutableRefObject<StationUpgradeCallbacks>;
@@ -126,6 +129,7 @@ interface GameCanvasProps {
   onOpenNpcDialogue: (dialogue: ActiveNpcDialogue) => void;
   onBubblesUpdate: (bubbles: NpcFloatingBubble[]) => void;
   onAnnouncement: (text: string) => void;
+  onWeatherChange: (weather: WeatherMode) => void;
   onPointerLockChange: (locked: boolean) => void;
   onEscUnlock: () => void;
   onWebglError: (msg: string) => void;
@@ -180,7 +184,6 @@ export function GameCanvas({
   resetSignal,
   interactTriggerSignal,
   announceSignal,
-  timeCycleSignal,
   touchInputRef,
   trainActionsRef,
   upgradeActionsRef,
@@ -197,6 +200,7 @@ export function GameCanvas({
   onOpenNpcDialogue,
   onBubblesUpdate,
   onAnnouncement,
+  onWeatherChange,
   onPointerLockChange,
   onEscUnlock,
   onWebglError,
@@ -208,6 +212,7 @@ export function GameCanvas({
   const phaseRef = useRef<GamePhase>(phase);
   const cameraModeRef = useRef<CameraMode>(cameraMode);
   const weatherRef = useRef<WeatherMode>(weather);
+  const autoWeatherRef = useRef<AutoWeatherState>(createInitialAutoWeatherState(weather));
   const audioSettingsRef = useRef<AudioSettings>(audioSettings);
   const dashboardOpenRef = useRef<boolean>(dashboardOpen);
   const upgradeDashboardOpenRef = useRef<boolean>(upgradeDashboardOpen);
@@ -224,6 +229,7 @@ export function GameCanvas({
   const onOpenNpcDialogueRef = useRef(onOpenNpcDialogue);
   const onBubblesUpdateRef = useRef(onBubblesUpdate);
   const onAnnouncementRef = useRef(onAnnouncement);
+  const onWeatherChangeRef = useRef(onWeatherChange);
   const onPointerLockChangeRef = useRef(onPointerLockChange);
   const onEscUnlockRef = useRef(onEscUnlock);
   const onWebglErrorRef = useRef(onWebglError);
@@ -242,7 +248,6 @@ export function GameCanvas({
   const trainStateRef = useRef<TrainSimulationState>(createInitialTrainSimulation(1));
   const triggerResetRef = useRef<() => void>(() => {});
   const triggerInteractRef = useRef<() => void>(() => {});
-  const triggerTimeCycleRef = useRef<() => void>(() => {});
   const pushDashboardRef = useRef<(force?: boolean) => void>(() => {});
   const pushUpgradeRef = useRef<(force?: boolean) => void>(() => {});
   const pushEmergencyRef = useRef<(force?: boolean) => void>(() => {});
@@ -344,6 +349,10 @@ export function GameCanvas({
   }, [onAnnouncement]);
 
   useEffect(() => {
+    onWeatherChangeRef.current = onWeatherChange;
+  }, [onWeatherChange]);
+
+  useEffect(() => {
     onPointerLockChangeRef.current = onPointerLockChange;
   }, [onPointerLockChange]);
 
@@ -372,12 +381,6 @@ export function GameCanvas({
       soundRef.current?.playNextBengaliAnnouncement();
     }
   }, [announceSignal]);
-
-  useEffect(() => {
-    if (timeCycleSignal > 0) {
-      triggerTimeCycleRef.current();
-    }
-  }, [timeCycleSignal]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -932,27 +935,6 @@ export function GameCanvas({
       },
     };
 
-    triggerTimeCycleRef.current = () => {
-      const m = simStateRef.current.gameMinutes % 1440;
-      const nextMinutes =
-        m < 540
-          ? 720 // Noon
-          : m < 1020
-            ? 1065 // Golden Dusk (17:45)
-            : m < 1260
-              ? 1290 // City Night Lights (21:30)
-              : 375; // Dawn (06:15)
-      simStateRef.current = {
-        ...simStateRef.current,
-        gameMinutes: nextMinutes,
-        lastEventMessage: `Time shifted to ${formatGameTime(nextMinutes)} (${getDayPeriodLabel(nextMinutes)}).`,
-        lastEventTimestamp: performance.now(),
-      };
-      sound.playStationBell();
-      pushHudSnapshot(true);
-      pushDashboardSnapshot(true);
-    };
-
     emergencyActionsRef.current = {
       dispatchOfficer: (missionId: string, officerId?: string) => {
         const res = dispatchOfficerToMission(
@@ -1185,6 +1167,9 @@ export function GameCanvas({
       player.speed = 0;
       player.sprinting = false;
       keys.clear();
+      weatherRef.current = saved.weather;
+      autoWeatherRef.current = createInitialAutoWeatherState(saved.weather);
+      sound.setWeather(saved.weather);
       onRestoreEnvironmentRef.current?.(saved);
       onBubblesUpdateRef.current([]);
       pushHudSnapshot(true);
@@ -1202,6 +1187,10 @@ export function GameCanvas({
     triggerResetRef.current = () => {
       simStateRef.current = createInitialSimState();
       trainStateRef.current = createInitialTrainSimulation(1);
+      autoWeatherRef.current = createInitialAutoWeatherState('clear');
+      weatherRef.current = 'clear';
+      sound.setWeather('clear');
+      onWeatherChangeRef.current('clear');
       world.resetNpcs();
       player.x = -2;
       player.z = -8.2;
@@ -1460,7 +1449,24 @@ export function GameCanvas({
         autoSaveTimer = 0;
         persistCurrentShift();
       }
-      simStateRef.current.gameMinutes = (simStateRef.current.gameMinutes + dt * 1.5) % 1440;
+      simStateRef.current.gameMinutes = advanceGameClock(simStateRef.current.gameMinutes, dt);
+
+      const weatherStep = stepAutoWeather(autoWeatherRef.current, dt, simStateRef.current.dayNumber);
+      autoWeatherRef.current = weatherStep.state;
+      if (weatherStep.changed) {
+        const nextWeather = weatherStep.state.mode;
+        weatherRef.current = nextWeather;
+        sound.setWeather(nextWeather);
+        onWeatherChangeRef.current(nextWeather);
+        if (weatherStep.message) {
+          simStateRef.current = {
+            ...simStateRef.current,
+            lastEventMessage: weatherStep.message,
+            lastEventTimestamp: performance.now(),
+          };
+        }
+        pushHudSnapshot(true);
+      }
 
       const trainStep = stepTrainSimulation(
         simStateRef.current,

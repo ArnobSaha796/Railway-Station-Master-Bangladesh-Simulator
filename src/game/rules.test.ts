@@ -1,14 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  advanceGameClock,
   BENGALI_ANNOUNCEMENTS,
   clampVolume,
   createDefaultAudioSettings,
+  createInitialAutoWeatherState,
   createInitialSimState,
   formatGameTime,
   getDayPeriodLabel,
   nextSignalAspect,
   performStationInteraction,
+  stepAutoWeather,
   xpThresholdForLevel,
 } from './rules';
 
@@ -86,4 +89,58 @@ test('interactions grant rewards, cycle 3-aspect signals, and inspect platform t
 
   const resDesk = performStationInteraction(state, 'dispatch_desk', 4000);
   assert.equal(resDesk.openDashboard, true);
+});
+
+test('automatic day-to-night clock advances through all periods and wraps 24h cleanly', () => {
+  let mins = 7 * 60 + 15; // 07:15 AM (Dawn)
+  assert.equal(getDayPeriodLabel(mins), 'Dawn');
+
+  // 20s -> +120 game minutes (09:15 AM Morning)
+  mins = advanceGameClock(mins, 20);
+  assert.equal(getDayPeriodLabel(mins), 'Morning');
+
+  // +40s -> 01:15 PM (Afternoon)
+  mins = advanceGameClock(mins, 40);
+  assert.equal(getDayPeriodLabel(mins), 'Afternoon');
+
+  // +45s -> 05:45 PM (Golden Dusk)
+  mins = advanceGameClock(mins, 45);
+  assert.equal(getDayPeriodLabel(mins), 'Golden Dusk');
+
+  // +25s -> 08:15 PM (Evening)
+  mins = advanceGameClock(mins, 25);
+  assert.equal(getDayPeriodLabel(mins), 'Evening');
+
+  // +30s -> 11:15 PM (Night)
+  mins = advanceGameClock(mins, 30);
+  assert.equal(getDayPeriodLabel(mins), 'Night');
+
+  // +80s -> wraps smoothly past midnight back to 07:15 AM (Dawn)
+  mins = advanceGameClock(mins, 80);
+  assert.equal(Math.round(mins), 7 * 60 + 15);
+  assert.equal(getDayPeriodLabel(mins), 'Dawn');
+});
+
+test('automatic weather cycle transitions naturally between clear sky and monsoon rain', () => {
+  let wState = createInitialAutoWeatherState('clear');
+  assert.equal(wState.mode, 'clear');
+
+  // Before threshold -> stays clear
+  const early = stepAutoWeather(wState, 10, 1);
+  assert.equal(early.changed, false);
+  assert.equal(early.state.mode, 'clear');
+  wState = early.state;
+
+  // Cross clear duration threshold -> switches automatically to monsoon rain
+  const toRain = stepAutoWeather(wState, 40, 1);
+  assert.equal(toRain.changed, true);
+  assert.equal(toRain.state.mode, 'rain');
+  assert.ok(toRain.message && toRain.message.toLowerCase().includes('monsoon'));
+  wState = toRain.state;
+
+  // Cross rain duration threshold -> clears back up automatically
+  const toClear = stepAutoWeather(wState, 60, 1);
+  assert.equal(toClear.changed, true);
+  assert.equal(toClear.state.mode, 'clear');
+  assert.ok(toClear.message && toClear.message.toLowerCase().includes('clearing'));
 });

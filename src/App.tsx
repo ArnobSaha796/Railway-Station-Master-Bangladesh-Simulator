@@ -252,7 +252,6 @@ export default function App() {
   const [resetSignal, setResetSignal] = useState(0);
   const [interactTriggerSignal, setInteractTriggerSignal] = useState(0);
   const [announceSignal, setAnnounceSignal] = useState(0);
-  const [timeCycleSignal, setTimeCycleSignal] = useState(0);
   const [webglError, setWebglError] = useState<string | null>(null);
   const [hud, setHud] = useState<HudSnapshot>(createInitialHud);
   const [dashboardSnapshot, setDashboardSnapshot] =
@@ -637,15 +636,6 @@ export default function App() {
         !emergencyDashboardOpen
       ) {
         setCameraMode((prev) => (prev === 'third-person' ? 'first-person' : 'third-person'));
-      } else if (
-        e.code === 'KeyL' &&
-        phase === 'playing' &&
-        !audioMixerOpen &&
-        !trainDashboardOpen &&
-        !upgradeDashboardOpen &&
-        !emergencyDashboardOpen
-      ) {
-        setTimeCycleSignal((n) => n + 1);
       } else if (e.code === 'KeyM') {
         setAudioSettings((prev) => ({ ...prev, muted: !prev.muted }));
       }
@@ -703,7 +693,6 @@ export default function App() {
           resetSignal={resetSignal}
           interactTriggerSignal={interactTriggerSignal}
           announceSignal={announceSignal}
-          timeCycleSignal={timeCycleSignal}
           touchInputRef={touchInputRef}
           trainActionsRef={trainActionsRef}
           upgradeActionsRef={upgradeActionsRef}
@@ -720,6 +709,7 @@ export default function App() {
           onOpenNpcDialogue={openNpcDialogue}
           onBubblesUpdate={setNpcBubbles}
           onAnnouncement={handleAnnouncement}
+          onWeatherChange={setWeather}
           onPointerLockChange={setPointerLocked}
           onRestoreEnvironment={handleRestoreEnvironment}
           onSavedShiftChange={refreshSavedShiftSummary}
@@ -763,8 +753,6 @@ export default function App() {
             onToggleCameraMode={() =>
               setCameraMode((prev) => (prev === 'third-person' ? 'first-person' : 'third-person'))
             }
-            onToggleWeather={() => setWeather((prev) => (prev === 'clear' ? 'rain' : 'clear'))}
-            onCycleTimeOfDay={() => setTimeCycleSignal((n) => n + 1)}
             onOpenAudioMixer={openAudioMixer}
             onOpenTrainDashboard={openTrainDashboard}
             onOpenUpgradeDashboard={openUpgradeDashboard}
@@ -827,12 +815,11 @@ export default function App() {
           reputation={hud.reputation}
           cameraMode={cameraMode}
           weather={weather}
+          dayPeriodLabel={hud.dayPeriodLabel}
           touchMode={touchMode}
           hasSavedShift={Boolean(savedShiftSummary)}
           saveFeedback={saveFeedback}
           onChangeCameraMode={setCameraMode}
-          onChangeWeather={setWeather}
-          onCycleTimeOfDay={() => setTimeCycleSignal((n) => n + 1)}
           onChangeTouchMode={setTouchMode}
           onOpenAudioMixer={openAudioMixer}
           onOpenTrainDashboard={openTrainDashboard}
@@ -861,7 +848,6 @@ export default function App() {
           settings={audioSettings}
           weather={weather}
           onChangeSettings={setAudioSettings}
-          onChangeWeather={setWeather}
           onTriggerAnnouncement={() => setAnnounceSignal((n) => n + 1)}
           onClose={() => closeAudioMixer(true)}
         />

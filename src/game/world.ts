@@ -1472,8 +1472,12 @@ export function buildStationWorld(
   const moonNightColor = new THREE.Color(0x93c5fd);
   const sunWarmColor = new THREE.Color(0xfff1d6);
   const duskSunColor = new THREE.Color(0xffa952);
+  const stormTopCol = new THREE.Color(0x3a495c);
+  const stormMidCol = new THREE.Color(0x4b5c70);
+  const stormHorCol = new THREE.Color(0x617387);
+  let rainBlend = 0;
   let lastSkyDaylight = -1;
-  let lastSkyWeather: WeatherMode | null = null;
+  let lastRainBlend = -1;
 
   const triggerLightningFlash = () => {
     lightningFlash = 1.6;
@@ -1862,9 +1866,19 @@ export function buildStationWorld(
       if (cloudClusters[i].position.x > 120) cloudClusters[i].position.x = -120;
     }
 
-    // Monsoon rain streaks & lightning decay
-    if (weather === 'rain') {
+    // Smoothly transition monsoon weather & rain streaks
+    const targetRain = weather === 'rain' ? 1 : 0;
+    if (rainBlend !== targetRain) {
+      const step = dt * 0.45;
+      rainBlend =
+        rainBlend < targetRain
+          ? Math.min(targetRain, rainBlend + step)
+          : Math.max(targetRain, rainBlend - step);
+    }
+
+    if (rainBlend > 0.08) {
       rainLines.visible = true;
+      rainMat.opacity = Math.min(0.55, rainBlend * 0.58);
       for (let i = 0; i < rainCount; i++) {
         rainOffsets[i * 3 + 1] -= dt * 22;
         rainOffsets[i * 3] -= dt * 2.2;
@@ -1916,50 +1930,59 @@ export function buildStationWorld(
     for (let b = 0; b < billboardMats.length; b++) {
       billboardMats[b].emissiveIntensity = 0.32 + nightGlow * 0.95;
     }
-    starMat.opacity = weather === 'rain' ? 0 : Math.max(0, (nightFactor - 0.2) * 1.15);
+    starMat.opacity = Math.max(0, (nightFactor - 0.2) * 1.15) * (1 - rainBlend);
     starField.visible = starMat.opacity > 0.02;
 
-    const rainDim = weather === 'rain' ? 0.65 : 1.0;
+    const rainDim = 1 - 0.35 * rainBlend;
     sunLight.intensity = (0.38 + daylightFactor * 1.32) * rainDim + lightningFlash;
     sunLight.color.lerpColors(moonNightColor, sunWarmColor, daylightFactor);
-    if (duskFactor > 0.25 && weather !== 'rain') {
-      sunLight.color.lerp(duskSunColor, duskFactor * 0.55);
+    if (duskFactor > 0.25 && rainBlend < 0.5) {
+      sunLight.color.lerp(duskSunColor, duskFactor * 0.55 * (1 - rainBlend));
     }
     hemiLight.intensity = (0.48 + daylightFactor * 0.4) * rainDim;
 
-    if (weather === 'rain') {
-      skyColor.setRGB(
-        0.24 + daylightFactor * 0.14 + lightningFlash * 0.25,
-        0.3 + daylightFactor * 0.17 + lightningFlash * 0.25,
-        0.38 + daylightFactor * 0.18 + lightningFlash * 0.25,
-      );
-      skyDome.mesh.visible = false;
-      cloudMat.opacity = 0.24;
-      lastSkyWeather = weather;
-    } else {
-      skyDome.mesh.visible = true;
-      if (Math.abs(daylightFactor - lastSkyDaylight) > 0.004 || lastSkyWeather !== weather) {
-        lastSkyDaylight = daylightFactor;
-        lastSkyWeather = weather;
-        skyTopCol.lerpColors(nightTop, dayTop, daylightFactor);
-        skyMidCol.lerpColors(nightMid, dayMid, daylightFactor);
-        skyHorCol.lerpColors(nightHor, dayHor, daylightFactor);
-        if (duskFactor > 0.05) {
-          skyTopCol.lerp(duskTop, duskFactor * 0.5);
-          skyMidCol.lerp(duskMid, duskFactor * 0.65);
-          skyHorCol.lerp(duskHor, duskFactor * 0.72);
-        }
-        skyDome.updateGradient(skyTopCol, skyMidCol, skyHorCol);
-        skyColor.copy(skyHorCol);
+    skyDome.mesh.visible = true;
+    if (
+      Math.abs(daylightFactor - lastSkyDaylight) > 0.004 ||
+      Math.abs(rainBlend - lastRainBlend) > 0.008 ||
+      lightningFlash > 0.02
+    ) {
+      lastSkyDaylight = daylightFactor;
+      lastRainBlend = rainBlend;
+      skyTopCol.lerpColors(nightTop, dayTop, daylightFactor);
+      skyMidCol.lerpColors(nightMid, dayMid, daylightFactor);
+      skyHorCol.lerpColors(nightHor, dayHor, daylightFactor);
+      if (duskFactor > 0.05) {
+        skyTopCol.lerp(duskTop, duskFactor * 0.5 * (1 - rainBlend));
+        skyMidCol.lerp(duskMid, duskFactor * 0.65 * (1 - rainBlend));
+        skyHorCol.lerp(duskHor, duskFactor * 0.72 * (1 - rainBlend));
       }
-      cloudMat.opacity = 0.22 + daylightFactor * 0.56;
+      if (rainBlend > 0.005) {
+        const stormScale = 0.45 + daylightFactor * 0.55;
+        const flashAdd = lightningFlash * 0.22;
+        skyTopCol.lerp(
+          stormTopCol.setRGB(0.2 * stormScale + flashAdd, 0.26 * stormScale + flashAdd, 0.34 * stormScale + flashAdd),
+          rainBlend,
+        );
+        skyMidCol.lerp(
+          stormMidCol.setRGB(0.24 * stormScale + flashAdd, 0.3 * stormScale + flashAdd, 0.38 * stormScale + flashAdd),
+          rainBlend,
+        );
+        skyHorCol.lerp(
+          stormHorCol.setRGB(0.28 * stormScale + flashAdd, 0.34 * stormScale + flashAdd, 0.42 * stormScale + flashAdd),
+          rainBlend,
+        );
+      }
+      skyDome.updateGradient(skyTopCol, skyMidCol, skyHorCol);
+      skyColor.copy(skyHorCol);
     }
+    cloudMat.opacity = THREE.MathUtils.lerp(0.22 + daylightFactor * 0.56, 0.24, rainBlend);
 
     scene.background = skyColor;
     if (scene.fog instanceof THREE.Fog) {
       scene.fog.color.copy(skyColor);
-      scene.fog.near = weather === 'rain' ? 35 : 70;
-      scene.fog.far = weather === 'rain' ? 135 : 210;
+      scene.fog.near = THREE.MathUtils.lerp(70, 35, rainBlend);
+      scene.fog.far = THREE.MathUtils.lerp(210, 135, rainBlend);
     }
 
     return {

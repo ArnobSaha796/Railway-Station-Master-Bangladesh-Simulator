@@ -1,5 +1,5 @@
 import { createDefaultAchievements } from './securityMissions';
-import type { AudioSettings, InteractableKind, SignalAspect, StationSimState } from './types';
+import type { AudioSettings, InteractableKind, SignalAspect, StationSimState, WeatherMode } from './types';
 
 export const STATION_NAME_EN = 'Shaplapur Junction';
 export const STATION_NAME_BN = 'শাপলাপুর জংশন';
@@ -108,6 +108,70 @@ export function applyXpAndRewards(
   };
 }
 
+export const GAME_MINUTES_PER_REAL_SECOND = 6;
+
+export function advanceGameClock(currentMinutes: number, dtSeconds: number): number {
+  const safeDt = Math.max(0, dtSeconds);
+  return (((currentMinutes + safeDt * GAME_MINUTES_PER_REAL_SECOND) % 1440) + 1440) % 1440;
+}
+
+export interface AutoWeatherState {
+  mode: WeatherMode;
+  timerSeconds: number;
+  nextChangeSeconds: number;
+  cycleIndex: number;
+}
+
+const CLEAR_DURATIONS_SEC = [45, 65, 55, 75] as const;
+const RAIN_DURATIONS_SEC = [35, 45, 30, 40] as const;
+
+export function createInitialAutoWeatherState(initialMode: WeatherMode = 'clear'): AutoWeatherState {
+  return {
+    mode: initialMode,
+    timerSeconds: 0,
+    nextChangeSeconds: initialMode === 'rain' ? RAIN_DURATIONS_SEC[0] : CLEAR_DURATIONS_SEC[0],
+    cycleIndex: 0,
+  };
+}
+
+export function stepAutoWeather(
+  state: AutoWeatherState,
+  dtSeconds: number,
+  dayNumber = 1,
+): { state: AutoWeatherState; changed: boolean; message: string | null } {
+  const safeDt = Math.max(0, dtSeconds);
+  const nextTimer = state.timerSeconds + safeDt;
+  if (nextTimer < state.nextChangeSeconds) {
+    return {
+      state: {
+        ...state,
+        timerSeconds: nextTimer,
+      },
+      changed: false,
+      message: null,
+    };
+  }
+
+  const nextCycle = state.cycleIndex + 1;
+  const nextMode: WeatherMode = state.mode === 'clear' ? 'rain' : 'clear';
+  const durationList = nextMode === 'rain' ? RAIN_DURATIONS_SEC : CLEAR_DURATIONS_SEC;
+  const duration = durationList[(nextCycle + Math.max(0, dayNumber - 1)) % durationList.length];
+
+  return {
+    state: {
+      mode: nextMode,
+      timerSeconds: 0,
+      nextChangeSeconds: duration,
+      cycleIndex: nextCycle,
+    },
+    changed: true,
+    message:
+      nextMode === 'rain'
+        ? 'Monsoon showers rolling across Shaplapur Junction.'
+        : 'Monsoon clouds clearing; skies brightening over the station.',
+  };
+}
+
 export function formatGameTime(totalMinutes: number): string {
   const wrapped = ((Math.floor(totalMinutes) % 1440) + 1440) % 1440;
   const hours24 = Math.floor(wrapped / 60);
@@ -126,7 +190,8 @@ export function getDayPeriodLabel(totalMinutes: number): string {
   if (hour >= 8 && hour < 12) return 'Morning';
   if (hour >= 12 && hour < 16.5) return 'Afternoon';
   if (hour >= 16.5 && hour < 19) return 'Golden Dusk';
-  return 'Evening';
+  if (hour >= 19 && hour < 21) return 'Evening';
+  return 'Night';
 }
 
 export interface InteractionResult {

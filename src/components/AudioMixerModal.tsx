@@ -6,7 +6,6 @@ interface AudioMixerModalProps {
   settings: AudioSettings;
   weather: WeatherMode;
   onChangeSettings: (next: AudioSettings) => void;
-  onChangeWeather: (next: WeatherMode) => void;
   onTriggerAnnouncement: () => void;
   onClose: () => void;
 }
@@ -23,7 +22,6 @@ export function AudioMixerModal({
   settings,
   weather,
   onChangeSettings,
-  onChangeWeather,
   onTriggerAnnouncement,
   onClose,
 }: AudioMixerModalProps) {
@@ -84,7 +82,7 @@ export function AudioMixerModal({
           })}
         </div>
 
-        {/* Quick Actions: Mute, Bengali PA Announcement, Monsoon Weather */}
+        {/* Quick Actions: Mute, Live Auto Weather Status, Bengali PA Announcement */}
         <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-2">
           <button
             type="button"
@@ -96,24 +94,22 @@ export function AudioMixerModal({
             <span>{settings.muted ? 'Audio Muted' : 'Audio Active'}</span>
           </button>
 
-          <button
-            type="button"
-            data-testid="mixer-weather-btn"
-            onClick={() => onChangeWeather(weather === 'clear' ? 'rain' : 'clear')}
-            className="py-2.5 px-3 rounded-lg border border-[#e8b84b]/35 bg-[#0d2117] hover:bg-[#1a3d2b] text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+          <div
+            data-testid="mixer-weather-status"
+            className="py-2.5 px-3 rounded-lg border border-[#e8b84b]/20 bg-[#0d2117] text-xs font-semibold flex items-center justify-center gap-2 text-[#dfd5bc]"
           >
             {weather === 'rain' ? (
               <>
                 <CloudRain className="w-4 h-4 text-[#7ec8f2]" />
-                <span>Monsoon Rain</span>
+                <span>Monsoon Rain (Auto)</span>
               </>
             ) : (
               <>
                 <Sun className="w-4 h-4 text-[#f5c756]" />
-                <span>Clear Day</span>
+                <span>Clear Sky (Auto)</span>
               </>
             )}
-          </button>
+          </div>
         </div>
 
         <button
