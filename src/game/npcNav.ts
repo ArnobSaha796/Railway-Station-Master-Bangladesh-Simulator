@@ -5,6 +5,7 @@ export type NavZone =
   | 'platform2'
   | 'platform3'
   | 'platform4'
+  | 'platform5'
   | 'forecourt'
   | 'office'
   | 'ticket_counter'
@@ -349,7 +350,7 @@ export const NAV_NODES: readonly NavNode[] = [
     z: 40.5,
     zone: 'footbridge',
     minTracks: 6,
-    neighbors: ['fb_m_top', 'fb_t4_base'],
+    neighbors: ['fb_m_top', 'fb_t4_base', 'fb_p5_top'],
   },
   {
     id: 'fb_t4_base',
@@ -359,6 +360,25 @@ export const NAV_NODES: readonly NavNode[] = [
     zone: 'footbridge',
     minTracks: 6,
     neighbors: ['fb_t4_top', 'p4_far_w'],
+  },
+  // Extended Footover Bridge to Chapter 2 Terminal Platform 5 (7+ Tracks)
+  {
+    id: 'fb_p5_top',
+    x: -24.0,
+    y: 4.85,
+    z: 59.1,
+    zone: 'footbridge',
+    minTracks: 7,
+    neighbors: ['fb_t4_top', 'fb_p5_base'],
+  },
+  {
+    id: 'fb_p5_base',
+    x: -28.0,
+    y: 0.65,
+    z: 59.1,
+    zone: 'footbridge',
+    minTracks: 7,
+    neighbors: ['fb_p5_top', 'p5_far_w'],
   },
 
   // Platform 2 main corridor (z = 6.9 north / 9.2 south)
@@ -648,7 +668,59 @@ export const NAV_NODES: readonly NavNode[] = [
     zone: 'platform4',
     platform: 6,
     minTracks: 6,
-    neighbors: ['p4_center', 'crossing_p4n'],
+    neighbors: ['p4_center', 'crossing_p4n', 'crossing_t7'],
+  },
+
+  // Chapter 2 Platform 5 Concourse (Track 7 & Track 8, z = 59.1, 7+ Tracks)
+  {
+    id: 'crossing_t7',
+    x: 18.5,
+    y: 0.14,
+    z: 51.8,
+    zone: 'crossing',
+    isTrackHazard: true,
+    minTracks: 7,
+    neighbors: ['p4_cross', 'p5_cross'],
+  },
+  {
+    id: 'p5_far_w',
+    x: -25.0,
+    y: 0.65,
+    z: 59.1,
+    zone: 'platform5',
+    platform: 7,
+    minTracks: 7,
+    neighbors: ['fb_p5_base', 'p5_w'],
+  },
+  {
+    id: 'p5_w',
+    x: -14.0,
+    y: 0.65,
+    z: 59.1,
+    zone: 'platform5',
+    platform: 7,
+    minTracks: 7,
+    neighbors: ['p5_far_w', 'p5_center'],
+  },
+  {
+    id: 'p5_center',
+    x: 0.0,
+    y: 0.65,
+    z: 59.1,
+    zone: 'platform5',
+    platform: 8,
+    minTracks: 7,
+    neighbors: ['p5_w', 'p5_cross'],
+  },
+  {
+    id: 'p5_cross',
+    x: 18.5,
+    y: 0.65,
+    z: 59.1,
+    zone: 'platform5',
+    platform: 8,
+    minTracks: 7,
+    neighbors: ['p5_center', 'crossing_t7'],
   },
 
   // Urban Promenade & City Forecourt Nodes

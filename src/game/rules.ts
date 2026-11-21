@@ -1,8 +1,18 @@
 import { createDefaultAchievements } from './securityMissions';
-import type { AudioSettings, InteractableKind, SignalAspect, StationSimState, WeatherMode } from './types';
+import type {
+  AudioSettings,
+  ChapterId,
+  InteractableKind,
+  SignalAspect,
+  StationSimState,
+  TrackId,
+  WeatherMode,
+} from './types';
 
 export const STATION_NAME_EN = 'Shaplapur Junction';
 export const STATION_NAME_BN = 'শাপলাপুর জংশন';
+export const CHAPTER2_STATION_NAME_EN = 'Padma Central Terminal';
+export const CHAPTER2_STATION_NAME_BN = 'পদ্মা সেন্ট্রাল টার্মিনাল';
 
 export const BENGALI_ANNOUNCEMENTS: readonly string[] = [
   'সম্মানিত যাত্রীবৃন্দ, ২ নম্বর প্ল্যাটফর্মে আন্তঃনগর ট্রেন প্রবেশ করছে।',
@@ -38,15 +48,17 @@ export function nextSignalAspect(current: SignalAspect): SignalAspect {
   return 'red';
 }
 
-export function createInitialSimState(): StationSimState {
+export function createInitialSimState(chapterId: ChapterId = 1): StationSimState {
+  const isCh2 = chapterId === 2;
   return {
-    level: 1,
+    chapterId,
+    level: isCh2 ? 4 : 1,
     xp: 0,
-    xpToNext: xpThresholdForLevel(1),
-    money: 1000,
-    reputation: 78,
-    satisfaction: 84,
-    securityRating: 86,
+    xpToNext: xpThresholdForLevel(isCh2 ? 4 : 1),
+    money: isCh2 ? 3200 : 1000,
+    reputation: isCh2 ? 82 : 78,
+    satisfaction: isCh2 ? 85 : 84,
+    securityRating: isCh2 ? 88 : 86,
     complaints: 0,
     successfulInteractions: 0,
     unresolvedIncidents: 0,
@@ -57,7 +69,7 @@ export function createInitialSimState(): StationSimState {
     gameMinutes: 7 * 60 + 15, // 07:15 AM — bright morning golden light
     dayNumber: 1,
     stationLevel: 1,
-    unlockedTracks: 2,
+    unlockedTracks: isCh2 ? 7 : 2,
     completedUpgradeLevels: [1],
     track1Signal: 'red',
     track2Signal: 'red',
@@ -68,12 +80,17 @@ export function createInitialSimState(): StationSimState {
       4: 'red',
       5: 'red',
       6: 'red',
+      7: 'red',
+      8: 'red',
     },
     crossingGateClosed: false,
     inspectedTrains: {},
     dispatchesCompleted: 0,
-    lastEventMessage:
-      'Welcome to Shaplapur Junction. Press [T] Train Control, [U] Station Upgrades, [G] Security Center, or walk platforms.',
+    onTimeDispatches: 0,
+    signalsRepaired: 0,
+    lastEventMessage: isCh2
+      ? 'Welcome to Padma Central Terminal (Chapter 2 · 7-Track Hub)! Press [O] Operations Hub, [T] Trains, [C] Stations.'
+      : 'Welcome to Shaplapur Junction. Press [T] Train Control, [U] Station Upgrades, [G] Security Center, or walk platforms.',
     lastEventTimestamp: 0,
   };
 }
@@ -200,9 +217,10 @@ export interface InteractionResult {
   leveledUp: boolean;
   openDashboard?: boolean;
   openUpgradeDashboard?: boolean;
+  openOperationsDashboard?: boolean;
 }
 
-export function getTrackSignal(state: StationSimState, trackId: 1 | 2 | 3 | 4 | 5 | 6): SignalAspect {
+export function getTrackSignal(state: StationSimState, trackId: TrackId): SignalAspect {
   if (state.trackSignals && state.trackSignals[trackId]) {
     return state.trackSignals[trackId];
   }
@@ -211,10 +229,10 @@ export function getTrackSignal(state: StationSimState, trackId: 1 | 2 | 3 | 4 | 
 
 export function withTrackSignal(
   state: StationSimState,
-  trackId: 1 | 2 | 3 | 4 | 5 | 6,
+  trackId: TrackId,
   aspect: SignalAspect,
 ): StationSimState {
-  const nextSignals = {
+  const nextSignals: Record<TrackId, SignalAspect> = {
     ...(state.trackSignals ?? {
       1: state.track1Signal,
       2: state.track2Signal,
@@ -222,6 +240,8 @@ export function withTrackSignal(
       4: 'red',
       5: 'red',
       6: 'red',
+      7: 'red',
+      8: 'red',
     }),
     [trackId]: aspect,
   };
@@ -244,6 +264,7 @@ export function performStationInteraction(
   let sound: InteractionResult['sound'] = 'coin';
   let openDashboard = false;
   let openUpgradeDashboard = false;
+  let openOperationsDashboard = false;
 
   switch (target) {
     case 'signal_track1':
@@ -251,8 +272,10 @@ export function performStationInteraction(
     case 'signal_track3':
     case 'signal_track4':
     case 'signal_track5':
-    case 'signal_track6': {
-      const trackNum = Number(target.slice(-1)) as 1 | 2 | 3 | 4 | 5 | 6;
+    case 'signal_track6':
+    case 'signal_track7':
+    case 'signal_track8': {
+      const trackNum = Number(target.slice(-1)) as TrackId;
       const nextSignal = nextSignalAspect(getTrackSignal(state, trackNum));
       const updated = withTrackSignal(state, trackNum, nextSignal);
       const label =
@@ -324,7 +347,9 @@ export function performStationInteraction(
     case 'platform_train_3':
     case 'platform_train_4':
     case 'platform_train_5':
-    case 'platform_train_6': {
+    case 'platform_train_6':
+    case 'platform_train_7':
+    case 'platform_train_8': {
       const platNum = Number(target.slice(-1));
       const trainLabel = activeTrainLabel || `Platform ${platNum} Train`;
       const inspectKey = `${target}_${trainLabel}`;
@@ -377,6 +402,19 @@ export function performStationInteraction(
       sound = 'bell';
       break;
     }
+    case 'operations_desk': {
+      openOperationsDashboard = true;
+      nextState = applyXpAndRewards(
+        state,
+        {
+          xpDelta: 5,
+          message: 'Opened Station Operations, Staff & Facilities Hub.',
+        },
+        nowMs,
+      );
+      sound = 'bell';
+      break;
+    }
   }
 
   return {
@@ -385,5 +423,6 @@ export function performStationInteraction(
     leveledUp: nextState.level > prevLevel,
     openDashboard,
     openUpgradeDashboard,
+    openOperationsDashboard,
   };
 }

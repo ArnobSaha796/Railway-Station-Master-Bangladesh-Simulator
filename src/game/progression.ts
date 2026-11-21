@@ -125,8 +125,85 @@ export const STATION_UPGRADE_TIERS: readonly StationUpgradeTierSpec[] = [
   },
 ];
 
-export function getUpgradeTierSpec(level: number): StationUpgradeTierSpec {
+export const CHAPTER2_UPGRADE_TIERS: readonly StationUpgradeTierSpec[] = [
+  {
+    level: 1,
+    tracksUnlocked: 7,
+    title: 'Padma National Rail Terminal',
+    titleBn: 'পদ্মা ন্যাশনাল রেল টার্মিনাল',
+    subtitle: '7 Active Tracks · Dual Control Towers & Flagship Concourse',
+    costCoins: 0,
+    rewardXp: 0,
+    rewardRep: 0,
+    revenueMultiplier: 1.75,
+    minDispatches: 0,
+    minSatisfaction: 0,
+    minReputation: 0,
+    minSecurityResolved: 0,
+    minPlayerLevel: 1,
+    unlockFeatures: [
+      '7 Active Tracks & 5 Platforms with Modern Glass Arched Train Shed',
+      'Expanded South Terminal Platform 5 & Dual Interlocking Towers',
+      'Chapter 2 High-Volume Simultaneous Express & Cargo Operations',
+    ],
+    constructionSummaryBn:
+      'পদ্মা সেন্ট্রাল টার্মিনাল ৭টি সক্রিয় রেললাইন ও আধুনিক আর্চ ছাউনি নিয়ে যাত্রা শুরু করেছে!',
+  },
+  {
+    level: 2,
+    tracksUnlocked: 8,
+    title: 'Padma 8-Track Megahub Terminal',
+    titleBn: 'পদ্মা ৮-ট্র্যাক মেগাহাব টার্মিনাল',
+    subtitle: 'Unlocks Track 8 · Dedicated High-Speed Express & Port Freight Line',
+    costCoins: 2400,
+    rewardXp: 360,
+    rewardRep: 6,
+    revenueMultiplier: 2.05,
+    minDispatches: 4,
+    minSatisfaction: 82,
+    minReputation: 84,
+    minSecurityResolved: 2,
+    minPlayerLevel: 4,
+    unlockFeatures: [
+      'Constructs Track 8 & Semaphore Signal 8 along South Terminal Platform 5',
+      'Activates Full 8-Track Simultaneous Diversion & Flagship Express Slots',
+      'Boosts Padma Terminal revenue multiplier to 2.05x across all operations',
+    ],
+    constructionSummaryBn:
+      'অভিনন্দন! পদ্মা সেন্ট্রাল টার্মিনালে ৮ নম্বর নতুন রেললাইন ও সিগন্যাল সফলভাবে চালু হয়েছে!',
+  },
+];
+
+export function getUpgradeTierSpec(level: number, chapterId: 1 | 2 = 1): StationUpgradeTierSpec {
   const safeLevel = Math.max(1, Math.floor(level));
+  if (chapterId === 2) {
+    if (safeLevel <= CHAPTER2_UPGRADE_TIERS.length) {
+      return CHAPTER2_UPGRADE_TIERS[safeLevel - 1];
+    }
+    const extraSteps = safeLevel - CHAPTER2_UPGRADE_TIERS.length;
+    return {
+      level: safeLevel,
+      tracksUnlocked: 8,
+      title: `Padma Apex Digital Rail Hub Tier ${safeLevel}`,
+      titleBn: `পদ্মা এপেক্স ডিজিটাল হাব স্তর ${safeLevel}`,
+      subtitle: `Level ${safeLevel} Chapter 2 Prestige · +${Math.round((1.05 + extraSteps * 0.25) * 100)}% Revenue`,
+      costCoins: 2400 + extraSteps * 850,
+      rewardXp: 360 + extraSteps * 90,
+      rewardRep: 4,
+      revenueMultiplier: Number((2.05 + extraSteps * 0.25).toFixed(2)),
+      minDispatches: 4 + extraSteps * 5,
+      minSatisfaction: Math.min(95, 82 + extraSteps * 2),
+      minReputation: Math.min(96, 84 + extraSteps * 2),
+      minSecurityResolved: 2 + extraSteps * 2,
+      minPlayerLevel: 4 + extraSteps,
+      unlockFeatures: [
+        'Full 8-track high-throughput automatic signaling across Padma Terminal',
+        `Increases Padma revenue multiplier to ${(2.05 + extraSteps * 0.25).toFixed(2)}x`,
+        'Unlocks VIP flagship express priority bonuses',
+      ],
+      constructionSummaryBn: `পদ্মা সেন্ট্রাল টার্মিনাল আধুনিকীকরণ স্তর ${safeLevel} সম্পন্ন হয়েছে!`,
+    };
+  }
   if (safeLevel <= STATION_UPGRADE_TIERS.length) {
     return STATION_UPGRADE_TIERS[safeLevel - 1];
   }
@@ -165,8 +242,8 @@ export function getUpgradeTierSpec(level: number): StationUpgradeTierSpec {
   };
 }
 
-export function getRevenueMultiplierForLevel(stationLevel: number): number {
-  return getUpgradeTierSpec(stationLevel).revenueMultiplier;
+export function getRevenueMultiplierForLevel(stationLevel: number, chapterId: 1 | 2 = 1): number {
+  return getUpgradeTierSpec(stationLevel, chapterId).revenueMultiplier;
 }
 
 export function evaluateStationUpgrade(simState: StationSimState): {
@@ -178,9 +255,10 @@ export function evaluateStationUpgrade(simState: StationSimState): {
   canUpgradeNow: boolean;
   securityActionsCompleted: number;
 } {
+  const chapterId = simState.chapterId === 2 ? 2 : 1;
   const currentLevel = Math.max(1, simState.stationLevel || 1);
-  const currentTier = getUpgradeTierSpec(currentLevel);
-  const nextTier = getUpgradeTierSpec(currentLevel + 1);
+  const currentTier = getUpgradeTierSpec(currentLevel, chapterId);
+  const nextTier = getUpgradeTierSpec(currentLevel + 1, chapterId);
   const securityActionsCompleted = simState.crimesPrevented + simState.emergenciesResolved;
 
   const requirements: StationUpgradeRequirement[] = [];
@@ -253,9 +331,11 @@ export function evaluateStationUpgrade(simState: StationSimState): {
 
 export function buildStationUpgradeSnapshot(simState: StationSimState): StationUpgradeSnapshot {
   const evalRes = evaluateStationUpgrade(simState);
+  const maxTracks = simState.chapterId === 2 ? 8 : 6;
+  const minTracks = simState.chapterId === 2 ? 7 : 2;
   return {
     stationLevel: Math.max(1, simState.stationLevel || 1),
-    unlockedTracks: Math.max(2, Math.min(6, simState.unlockedTracks || 2)),
+    unlockedTracks: Math.max(minTracks, Math.min(maxTracks, simState.unlockedTracks || minTracks)),
     currentTier: evalRes.currentTier,
     nextTier: evalRes.nextTier,
     requirements: evalRes.requirements,
@@ -319,8 +399,10 @@ export function purchaseNextStationUpgrade(
     };
   }
 
-  const prevTracks = Math.max(2, Math.min(6, simState.unlockedTracks || 2));
-  const newUnlockedTracks = Math.max(prevTracks, Math.min(6, nextTier.tracksUnlocked));
+  const maxTracks = simState.chapterId === 2 ? 8 : 6;
+  const minTracks = simState.chapterId === 2 ? 7 : 2;
+  const prevTracks = Math.max(minTracks, Math.min(maxTracks, simState.unlockedTracks || minTracks));
+  const newUnlockedTracks = Math.max(prevTracks, Math.min(maxTracks, nextTier.tracksUnlocked));
   const tracksAdded = newUnlockedTracks > prevTracks;
 
   const updatedSignals = { ...simState.trackSignals };

@@ -13,11 +13,16 @@ import {
 } from 'lucide-react';
 import { formatGameTime } from '../game/rules';
 import { TRAIN_CATEGORY_SPECS } from '../game/trainManager';
+import {
+  VipSecurityControlPanel,
+  type VipSecurityControlActions,
+} from './VipSecurityControlPanel';
 import type {
   ManagedTrain,
   SignalAspect,
   TrackId,
   TrainDashboardSnapshot,
+  VipSecurityProtocol,
 } from '../game/types';
 
 export interface TrainControlCallbacks {
@@ -39,6 +44,8 @@ export interface TrainControlCallbacks {
 interface TrainDashboardModalProps {
   snapshot: TrainDashboardSnapshot;
   actions: TrainControlCallbacks;
+  vipProtocol?: VipSecurityProtocol | null;
+  vipActions?: VipSecurityControlActions;
   onClose: () => void;
 }
 
@@ -58,6 +65,8 @@ const STATUS_BADGE_STYLES: Record<ManagedTrain['status'], string> = {
 export function TrainDashboardModal({
   snapshot,
   actions,
+  vipProtocol = null,
+  vipActions,
   onClose,
 }: TrainDashboardModalProps) {
   const [filter, setFilter] = useState<TimetableFilter>('all');
@@ -261,6 +270,11 @@ export function TrainDashboardModal({
               <span>Yellow-Line Safety PA (বাংলা)</span>
             </button>
           </div>
+
+          {/* Emergency VIP Security Trigger & Control Room Verification Panel */}
+          {vipActions && (
+            <VipSecurityControlPanel protocol={vipProtocol} actions={vipActions} />
+          )}
 
           {/* Safety Alerts Strip */}
           {snapshot.alerts.length > 0 ? (

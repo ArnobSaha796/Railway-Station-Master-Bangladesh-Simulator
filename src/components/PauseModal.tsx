@@ -1,4 +1,13 @@
-import { Building2, FolderOpen, Save, ShieldAlert, SlidersHorizontal, TrainFront } from 'lucide-react';
+import {
+  Building2,
+  ClipboardCheck,
+  FolderOpen,
+  MapPinned,
+  Save,
+  ShieldAlert,
+  SlidersHorizontal,
+  TrainFront,
+} from 'lucide-react';
 import type { CameraMode, TouchControlsMode, WeatherMode } from '../game/types';
 
 interface PauseModalProps {
@@ -18,6 +27,8 @@ interface PauseModalProps {
   onOpenTrainDashboard: () => void;
   onOpenUpgradeDashboard: () => void;
   onOpenEmergencyDashboard: () => void;
+  onOpenOperationsModal: () => void;
+  onOpenStationSelector: () => void;
   onSaveShift: () => void;
   onLoadSavedShift: () => void;
   onResume: () => void;
@@ -42,6 +53,8 @@ export function PauseModal({
   onOpenTrainDashboard,
   onOpenUpgradeDashboard,
   onOpenEmergencyDashboard,
+  onOpenOperationsModal,
+  onOpenStationSelector,
   onSaveShift,
   onLoadSavedShift,
   onResume,
@@ -146,6 +159,24 @@ export function PauseModal({
             className="w-full py-3 rounded-lg bg-[#e8b84b] hover:bg-[#f2c65e] text-[#14241b] font-display font-bold text-sm cursor-pointer"
           >
             Resume Game
+          </button>
+          <button
+            type="button"
+            data-testid="pause-operations-modal-btn"
+            onClick={onOpenOperationsModal}
+            className="w-full py-2.5 rounded-lg bg-[#1d4431] hover:bg-[#25573f] text-[#fde68a] font-semibold text-sm border border-[#f59e0b]/45 flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <ClipboardCheck className="w-4 h-4 text-[#f59e0b]" />
+            <span>Station Operations &amp; Tasks [O]</span>
+          </button>
+          <button
+            type="button"
+            data-testid="pause-station-selector-btn"
+            onClick={onOpenStationSelector}
+            className="w-full py-2.5 rounded-lg bg-[#0c354c] hover:bg-[#104766] text-[#bae6fd] font-semibold text-sm border border-[#38bdf8]/45 flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <MapPinned className="w-4 h-4 text-[#7dd3fc]" />
+            <span>Chapters &amp; Station Network [C]</span>
           </button>
           <button
             type="button"

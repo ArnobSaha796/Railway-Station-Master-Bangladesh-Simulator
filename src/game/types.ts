@@ -8,7 +8,9 @@ export type SignalAspect = 'red' | 'yellow' | 'green';
 
 export type TouchControlsMode = 'auto' | 'on' | 'off';
 
-export type TrackId = 1 | 2 | 3 | 4 | 5 | 6;
+export type TrackId = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+
+export type ChapterId = 1 | 2;
 
 export type SwitchPosition = 'straight' | 'crossover';
 
@@ -54,12 +56,15 @@ export interface ColliderBox {
 export type InteractableKind =
   | 'dispatch_desk'
   | 'upgrade_desk'
+  | 'operations_desk'
   | 'signal_track1'
   | 'signal_track2'
   | 'signal_track3'
   | 'signal_track4'
   | 'signal_track5'
   | 'signal_track6'
+  | 'signal_track7'
+  | 'signal_track8'
   | 'crossing_gate'
   | 'tea_stall'
   | 'jhalmuri_stall'
@@ -69,7 +74,10 @@ export type InteractableKind =
   | 'platform_train_4'
   | 'platform_train_5'
   | 'platform_train_6'
+  | 'platform_train_7'
+  | 'platform_train_8'
   | 'emergency_hazard'
+  | 'ops_repair_point'
   | 'train_operational_event';
 
 export interface InteractablePoint {
@@ -512,6 +520,7 @@ export interface StationUpgradeSnapshot {
 }
 
 export interface StationSimState {
+  chapterId?: ChapterId;
   level: number;
   xp: number;
   xpToNext: number;
@@ -529,7 +538,7 @@ export interface StationSimState {
   gameMinutes: number; // minutes since midnight (e.g. 435 = 07:15 AM)
   dayNumber: number;
   stationLevel: number;
-  unlockedTracks: number; // starts at 2, expands progressively 2 -> 3 -> 4 -> 5 -> 6
+  unlockedTracks: number; // Chapter 1: 2 -> 6, Chapter 2: 7 -> 8
   completedUpgradeLevels: number[];
   track1Signal: SignalAspect;
   track2Signal: SignalAspect;
@@ -537,6 +546,8 @@ export interface StationSimState {
   crossingGateClosed: boolean;
   inspectedTrains: Record<string, boolean>;
   dispatchesCompleted: number;
+  onTimeDispatches?: number;
+  signalsRepaired?: number;
   lastEventMessage: string;
   lastEventTimestamp: number;
 }
@@ -553,7 +564,317 @@ export interface PlayerState {
   sprinting: boolean;
 }
 
+// --- Daily Station Tasks & Mission Progression ---
+
+export type StationTaskCategory =
+  | 'daily'
+  | 'weekly'
+  | 'special'
+  | 'management'
+  | 'development';
+
+export type StationTaskMetric =
+  | 'on_time_dispatches'
+  | 'signal_repairs'
+  | 'emergencies_resolved'
+  | 'passenger_assists'
+  | 'facilities_maintained'
+  | 'staff_trained'
+  | 'security_prevented'
+  | 'simultaneous_trains'
+  | 'station_upgrades';
+
+export interface StationTask {
+  id: string;
+  category: StationTaskCategory;
+  metric: StationTaskMetric;
+  title: string;
+  titleBn: string;
+  description: string;
+  current: number;
+  target: number;
+  completed: boolean;
+  claimed: boolean;
+  rewardMoney: number;
+  rewardXp: number;
+  rewardRep: number;
+  unlockAbility?: string;
+  chapterExclusive?: ChapterId;
+}
+
+// --- Advanced Station Emergencies & Dynamic Events ---
+
+export type OpsEmergencyKind =
+  | 'track_obstruction'
+  | 'track_maintenance'
+  | 'train_breakdown'
+  | 'signal_fault'
+  | 'power_failure'
+  | 'broken_escalator'
+  | 'water_leakage'
+  | 'missing_staff'
+  | 'vip_security'
+  | 'emergency_evacuation'
+  | 'delayed_train'
+  | 'unexpected_arrival'
+  | 'platform_reassignment'
+  | 'passenger_rush'
+  | 'ticket_machine_failure'
+  | 'pa_system_failure'
+  | 'cleaning_shortage'
+  | 'ch2_simultaneous_arrivals'
+  | 'ch2_emergency_diversion'
+  | 'ch2_megahub_surge';
+
+export interface OpsEmergencyEvent {
+  id: string;
+  kind: OpsEmergencyKind;
+  title: string;
+  titleBn: string;
+  objective: string;
+  actionLabel: string;
+  locationLabel: string;
+  trackId?: TrackId;
+  trainId?: string;
+  facilityId?: FacilityId;
+  x: number;
+  z: number;
+  severity: EmergencySeverity;
+  timeRemainingSec: number;
+  maxTimeSec: number;
+  progressPct: number; // 0..100 (auto-advances when assigned staff works on it, or instant via player action)
+  requiredRole: StaffRole;
+  repairCostCoins: number;
+  rewardMoney: number;
+  rewardXp: number;
+  rewardRep: number;
+  penaltySat: number;
+  penaltyRep: number;
+  resolved: boolean;
+  failed: boolean;
+  chapterExclusive?: ChapterId;
+}
+
+// --- Station Staff Management ---
+
+export type StaffRole =
+  | 'signal_engineer'
+  | 'ticket_clerk'
+  | 'platform_supervisor'
+  | 'medical_officer'
+  | 'maintenance_crew'
+  | 'security_coordinator';
+
+export type StaffShift = 'morning' | 'evening' | 'night';
+
+export type StaffDuty =
+  | 'signals_tracks'
+  | 'platforms_boarding'
+  | 'facilities_power'
+  | 'passenger_service'
+  | 'security_support'
+  | 'standby';
+
+export interface StationStaffMember {
+  id: string;
+  name: string;
+  nameBn: string;
+  role: StaffRole;
+  roleLabel: string;
+  shift: StaffShift;
+  duty: StaffDuty;
+  performance: number; // 0..100
+  fatigue: number; // 0..100
+  salaryPerDay: number;
+  absent: boolean;
+  assignedTaskLabel: string;
+  level: number;
+}
+
+// --- Advanced Station Facility Management (15 Facilities) ---
+
+export type FacilityId =
+  | 'ticket_counters'
+  | 'information_desks'
+  | 'waiting_rooms'
+  | 'food_courts'
+  | 'medical_room'
+  | 'police_office'
+  | 'security_control_room'
+  | 'luggage_storage'
+  | 'restrooms'
+  | 'staff_room'
+  | 'seating_areas'
+  | 'platform_lighting'
+  | 'digital_info_boards'
+  | 'footbridges'
+  | 'elevators_escalators';
+
+export interface StationFacility {
+  id: FacilityId;
+  name: string;
+  nameBn: string;
+  constructed: boolean;
+  level: number; // 1..3
+  condition: number; // 0..100
+  constructCost: number;
+  upgradeCost: number;
+  maintenanceCostPerDay: number;
+  dailyIncome: number;
+  satisfactionBonus: number;
+}
+
+// --- Station Economy & Finance Ledger ---
+
+export interface StationFinanceLedger {
+  dayNumber: number;
+  ticketIncomeToday: number;
+  rentalIncomeToday: number;
+  cargoIncomeToday: number;
+  staffSalariesToday: number;
+  electricityBillToday: number;
+  maintenanceCostToday: number;
+  constructionSpendToday: number;
+  emergencyRepairSpendToday: number;
+  netToday: number;
+  totalLifetimeIncome: number;
+  totalLifetimeExpenses: number;
+}
+
+// --- Shared Profile & Multi-Chapter State ---
+
+export interface SharedPlayerProfile {
+  playerName: string;
+  level: number;
+  xp: number;
+  xpToNext: number;
+  achievements: SecurityAchievement[];
+  unlockedAbilities: string[];
+  totalDispatchesAllStations: number;
+  totalTasksCompleted: number;
+  totalEmergenciesResolved: number;
+}
+
+export type VipFlowPattern =
+  | 'diplomatic_evac_corridor'
+  | 'red_carpet_concourse_sweep'
+  | 'split_platform_lockdown';
+
+export interface VipCredentialRecord {
+  id: string;
+  delegateName: string;
+  delegateNameBn: string;
+  designation: string;
+  badgeCode: string;
+  expectedManifestCode: string;
+  assignedCoach: string;
+  clearanceTier: 'Diplomatic Alpha' | 'Ministry Escort' | 'Railway Board';
+  authentic: boolean;
+  anomalyHint?: string;
+  status: 'pending' | 'verified' | 'rejected';
+}
+
+export interface VipSecurityProtocol {
+  active: boolean;
+  eventId: string;
+  codename: string;
+  codenameBn: string;
+  flowPattern: VipFlowPattern;
+  flowPatternLabel: string;
+  flowPatternDescription: string;
+  lockedPlatforms: TrackId[];
+  sweepOrderedPlatforms: TrackId[];
+  clearedPlatforms: TrackId[];
+  platformPassengerCounts: Partial<Record<TrackId, number>>;
+  credentials: VipCredentialRecord[];
+  expectedManifestPrefix: string;
+  passengersOnLockedPlatforms: number;
+  initialPassengersOnLockedPlatforms: number;
+  corridorEvacuationPct: number;
+  timeRemainingSec: number;
+  maxTimeSec: number;
+  completed: boolean;
+  failed: boolean;
+  banglaAnnouncement: string;
+}
+
+export interface StationOperationsState {
+  tasks: StationTask[];
+  activeOpsEvents: OpsEmergencyEvent[];
+  recentResolvedOps: OpsEmergencyEvent[];
+  staff: StationStaffMember[];
+  facilities: StationFacility[];
+  finance: StationFinanceLedger;
+  faultedSignalTracks: TrackId[];
+  obstructedTracks: TrackId[];
+  powerOutageActive: boolean;
+  paSystemFailed: boolean;
+  nextOpsSpawnSec: number;
+  lastFinanceAppliedDay: number;
+  vipProtocol: VipSecurityProtocol | null;
+}
+
+export interface ChapterUnlockRequirement {
+  id: string;
+  label: string;
+  current: number;
+  target: number;
+  unit?: string;
+  met: boolean;
+}
+
+export interface ChapterUnlockStatus {
+  chapter1Completed: boolean;
+  chapter2Unlocked: boolean;
+  celebrationDismissed: boolean;
+  requirements: ChapterUnlockRequirement[];
+}
+
+export interface StationCardSummary {
+  chapterId: ChapterId;
+  title: string;
+  stationName: string;
+  stationNameBn: string;
+  unlocked: boolean;
+  isCurrent: boolean;
+  tracksCount: number;
+  maxTracks: number;
+  stationLevel: number;
+  reputation: number;
+  satisfaction: number;
+  money: number;
+  dailyIncome: number;
+  dailyExpenses: number;
+  activeTrainsCount: number;
+  activeEmergenciesCount: number;
+  statusLabel: string;
+}
+
+export interface StationOperationsSnapshot {
+  chapterId: ChapterId;
+  stationName: string;
+  money: number;
+  reputation: number;
+  satisfaction: number;
+  tasks: StationTask[];
+  activeOpsEvents: OpsEmergencyEvent[];
+  recentResolvedOps: OpsEmergencyEvent[];
+  staff: StationStaffMember[];
+  facilities: StationFacility[];
+  finance: StationFinanceLedger;
+  faultedSignalTracks: TrackId[];
+  obstructedTracks: TrackId[];
+  powerOutageActive: boolean;
+  paSystemFailed: boolean;
+  vipProtocol: VipSecurityProtocol | null;
+  chapterUnlockStatus: ChapterUnlockStatus;
+  stationCards: StationCardSummary[];
+}
+
 export interface HudSnapshot {
+  chapterId: ChapterId;
+  chapter2Unlocked: boolean;
+  chapter1JustCompleted: boolean;
   stationName: string;
   stationNameBn: string;
   dayNumber: number;
@@ -576,7 +897,20 @@ export interface HudSnapshot {
   activeCrowdCount: number;
   activeIncident: ActiveStationIncident | null;
   activeMissionsCount: number;
+  activeOpsCount: number;
   primaryMission: EmergencyMission | null;
+  activeDailyTask: {
+    id: string;
+    title: string;
+    current: number;
+    target: number;
+    completed: boolean;
+    claimed: boolean;
+  } | null;
+  powerOutageActive: boolean;
+  paSystemFailed: boolean;
+  vipSecurityActive: boolean;
+  vipLockedPlatforms: TrackId[];
   availableOfficersCount: number;
   timeFormatted: string;
   dayPeriodLabel: string;

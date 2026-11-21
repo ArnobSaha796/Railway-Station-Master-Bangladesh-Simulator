@@ -15,7 +15,7 @@ import type {
   TrainSimulationState,
 } from './types';
 
-export const ALL_TRACK_IDS: readonly TrackId[] = [1, 2, 3, 4, 5, 6];
+export const ALL_TRACK_IDS: readonly TrackId[] = [1, 2, 3, 4, 5, 6, 7, 8];
 
 export const TRACK_Z: Record<TrackId, number> = {
   1: -3.0,
@@ -24,6 +24,8 @@ export const TRACK_Z: Record<TrackId, number> = {
   4: 19.3,
   5: 29.8,
   6: 35.8,
+  7: 48.8,
+  8: 54.8,
 };
 
 export const TRACK_PLATFORM_SIDE: Record<TrackId, -1 | 1> = {
@@ -33,6 +35,8 @@ export const TRACK_PLATFORM_SIDE: Record<TrackId, -1 | 1> = {
   4: 1,
   5: -1,
   6: 1,
+  7: 1,
+  8: -1,
 };
 
 export function inferTrackFromZ(z: number): TrackId {
@@ -637,6 +641,32 @@ const EXPANSION_ROSTER: readonly DailySlotTemplate[] = [
     delayMinutes: 0,
     direction: -1,
   },
+  {
+    trainNumber: '792',
+    name: 'Banlata Non-Stop Intercity',
+    nameBn: 'বনলতা নন-স্টপ এক্সপ্রেস',
+    category: 'intercity',
+    origin: 'Rajshahi',
+    destination: 'Dhaka',
+    destinationBn: 'ঢাকা',
+    arrivalMin: 7 * 60 + 30,
+    dwellMin: 10,
+    delayMinutes: 0,
+    direction: 1,
+  },
+  {
+    trainNumber: '785',
+    name: 'Bijoy Padma Flagship Express',
+    nameBn: 'বিজয় পদ্মা ফ্ল্যাগশিপ এক্সপ্রেস',
+    category: 'international',
+    origin: 'Khulna',
+    destination: 'Dhaka Cantt',
+    destinationBn: 'ঢাকা ক্যান্টনমেন্ট',
+    arrivalMin: 7 * 60 + 44,
+    dwellMin: 11,
+    delayMinutes: 0,
+    direction: -1,
+  },
 ];
 
 function buildTrainFromTemplate(
@@ -793,6 +823,8 @@ export function computeTrackOccupancy(trains: readonly ManagedTrain[]): {
     4: createEmptyOccupancy(),
     5: createEmptyOccupancy(),
     6: createEmptyOccupancy(),
+    7: createEmptyOccupancy(),
+    8: createEmptyOccupancy(),
   };
 
   for (const t of trains) {
@@ -822,7 +854,7 @@ export function createInitialTrainSimulation(
   dayNumber = 1,
   unlockedTracks = 2,
 ): TrainSimulationState {
-  const safeTracks = Math.max(2, Math.min(6, unlockedTracks));
+  const safeTracks = Math.max(2, Math.min(8, unlockedTracks));
   const trains = generateDailySchedule(dayNumber, safeTracks);
   const occ = computeTrackOccupancy(trains);
   return {
@@ -837,7 +869,7 @@ export function createInitialTrainSimulation(
       trains,
       occ.byTrack,
       'straight',
-      { 1: 'red', 2: 'red', 3: 'red', 4: 'red', 5: 'red', 6: 'red' },
+      { 1: 'red', 2: 'red', 3: 'red', 4: 'red', 5: 'red', 6: 'red', 7: 'red', 8: 'red' },
       safeTracks,
     ),
     lastAnnouncementText: null,
@@ -850,7 +882,7 @@ export function syncTrainSimulationUnlockedTracks(
   unlockedTracks: number,
   currentGameMinutes = 435,
 ): TrainSimulationState {
-  const safeTracks = Math.max(2, Math.min(6, unlockedTracks));
+  const safeTracks = Math.max(2, Math.min(8, unlockedTracks));
   const prevTracks = trainState.unlockedTracks ?? 2;
   if (safeTracks <= prevTracks) {
     return trainState;
@@ -894,6 +926,8 @@ function signalsRecordFromSim(simState: StationSimState): Record<TrackId, Signal
     4: getTrackSignal(simState, 4),
     5: getTrackSignal(simState, 5),
     6: getTrackSignal(simState, 6),
+    7: getTrackSignal(simState, 7),
+    8: getTrackSignal(simState, 8),
   };
 }
 
@@ -982,7 +1016,7 @@ export function assignTrainPlatform(
   platform: TrackId,
   nowMs: number,
 ): TrainActionOutcome {
-  const unlockedTracks = Math.max(2, Math.min(6, simState.unlockedTracks || trainState.unlockedTracks || 2));
+  const unlockedTracks = Math.max(2, Math.min(8, simState.unlockedTracks || trainState.unlockedTracks || 2));
   if (platform > unlockedTracks) {
     const lockedSim = applyXpAndRewards(
       simState,
@@ -1109,7 +1143,7 @@ export function setTrackSignalAspect(
   aspect: SignalAspect,
   nowMs: number,
 ): TrainActionOutcome {
-  const unlockedTracks = Math.max(2, Math.min(6, simState.unlockedTracks || trainState.unlockedTracks || 2));
+  const unlockedTracks = Math.max(2, Math.min(8, simState.unlockedTracks || trainState.unlockedTracks || 2));
   if (track > unlockedTracks) {
     return { simState, trainState, announcement: null, sound: 'signal', accepted: false };
   }
@@ -1160,6 +1194,8 @@ export function setTrackSignalAspect(
     4: createEmptyOccupancy(),
     5: createEmptyOccupancy(),
     6: createEmptyOccupancy(),
+    7: createEmptyOccupancy(),
+    8: createEmptyOccupancy(),
   };
 
   return {
@@ -1236,6 +1272,8 @@ export function toggleSwitchPosition(
           4: createEmptyOccupancy(),
           5: createEmptyOccupancy(),
           6: createEmptyOccupancy(),
+          7: createEmptyOccupancy(),
+          8: createEmptyOccupancy(),
         },
         nextPos,
         signalsRecordFromSim(nextSim),
@@ -1297,6 +1335,8 @@ export function toggleEmergencyStopTrain(
           4: createEmptyOccupancy(),
           5: createEmptyOccupancy(),
           6: createEmptyOccupancy(),
+          7: createEmptyOccupancy(),
+          8: createEmptyOccupancy(),
         },
         trainState.switchPosition,
         signalsRecordFromSim(nextSim),
@@ -1741,9 +1781,11 @@ export function authorizeTrainDeparture(
 
   const gateSafe = train.direction === -1 || simState.crossingGateClosed;
   const spec = TRAIN_CATEGORY_SPECS[train.category];
-  const revMult = getRevenueMultiplierForLevel(simState.stationLevel || 1);
+  const chapterId = simState.chapterId === 2 ? 2 : 1;
+  const revMult = getRevenueMultiplierForLevel(simState.stationLevel || 1, chapterId);
   const baseCoins = Math.round((spec.isCargo ? 180 : train.category === 'international' ? 220 : 140) * revMult);
-  const onTimeBonus = train.delayMinutes === 0 ? 35 : 0;
+  const onTime = train.delayMinutes === 0;
+  const onTimeBonus = onTime ? 35 : 0;
   const safetyPenaltyRep = gateSafe ? 4 : -4;
   const moneyGain = gateSafe ? baseCoins + onTimeBonus : Math.max(40, baseCoins - 60);
 
@@ -1767,6 +1809,7 @@ export function authorizeTrainDeparture(
   const updatedSim: StationSimState = {
     ...simState,
     dispatchesCompleted: simState.dispatchesCompleted + 1,
+    onTimeDispatches: (simState.onTimeDispatches ?? 0) + (onTime && gateSafe ? 1 : 0),
   };
 
   const rewardedSim = applyXpAndRewards(
@@ -2069,7 +2112,8 @@ export function stepTrainSimulation(
   // 3. Roll over to next day seamlessly once all trains have departed without resetting continuous day/night clock
   let dayAdvancedTo: number | null = null;
   const allFinished = trains.every((t) => t.status === 'Departed');
-  const unlockedTracks = Math.max(2, Math.min(6, nextSimState.unlockedTracks || trainState.unlockedTracks || 2));
+  const maxTrackCap = nextSimState.chapterId === 2 ? 8 : 6;
+  const unlockedTracks = Math.max(2, Math.min(maxTrackCap, nextSimState.unlockedTracks || trainState.unlockedTracks || 2));
   if (allFinished) {
     const nextDay = trainState.dayNumber + 1;
     dayAdvancedTo = nextDay;
@@ -2082,6 +2126,8 @@ export function stepTrainSimulation(
       4: 'red',
       5: 'red',
       6: 'red',
+      7: 'red',
+      8: 'red',
     };
     nextSimState = {
       ...nextSimState,
@@ -2147,4 +2193,164 @@ export function stepTrainSimulation(
       dayAdvancedTo,
     },
   };
+}
+
+/**
+ * Advanced Operations: injects an unexpected special train arrival onto the active approach corridor.
+ */
+export function injectUnexpectedTrain(
+  simState: StationSimState,
+  trainState: TrainSimulationState,
+  nowMs = Date.now(),
+  reasonLabel = 'Unexpected Special Relief Train',
+): TrainActionOutcome {
+  const maxTracks = simState.chapterId === 2 ? 8 : 6;
+  const unlocked = Math.max(2, Math.min(maxTracks, simState.unlockedTracks || 2));
+  const seq = trainState.trains.length + 1;
+  const tpl = EXPANSION_ROSTER[seq % EXPANSION_ROSTER.length];
+  const added = buildTrainFromTemplate(
+    {
+      ...tpl,
+      trainNumber: `SP-${900 + seq}`,
+      name: `Special Relief Express #${seq}`,
+      nameBn: 'বিশেষ রিলিফ এক্সপ্রেস',
+      delayMinutes: 0,
+    },
+    seq,
+    trainState.dayNumber,
+    0,
+    false,
+    simState.gameMinutes,
+  );
+  added.id = `unexpected_${trainState.dayNumber}_${seq}_${Math.floor(nowMs)}`;
+  added.status = 'Approaching';
+  added.assignedPlatform = null;
+  added.x = added.direction === 1 ? -78 : 78;
+  added.speed = added.maxSpeed * 0.55;
+  added.holdingReason = 'Awaiting Platform Assignment';
+
+  const trains = [added, ...trainState.trains];
+  const occ = computeTrackOccupancy(trains);
+  const announcement = `বিশেষ দৃষ্টি আকর্ষণ! একটি অতিরিক্ত রিলিফ ট্রেন স্টেশনে প্রবেশ করছে, দ্রুত প্ল্যাটফর্ম নির্ধারণ করুন।`;
+  const nextSim = applyXpAndRewards(
+    simState,
+    {
+      xpDelta: 15,
+      message: `${reasonLabel}: ${added.name} (#${added.trainNumber}) approaching! Assign Tracks 1–${unlocked}.`,
+    },
+    nowMs,
+  );
+
+  return {
+    simState: nextSim,
+    trainState: {
+      ...trainState,
+      trains,
+      track1Occupancy: occ.track1,
+      track2Occupancy: occ.track2,
+      trackOccupancies: occ.byTrack,
+      alerts: buildSafetyAlerts(
+        trains,
+        occ.byTrack,
+        trainState.switchPosition,
+        signalsRecordFromSim(nextSim),
+        unlocked,
+      ),
+      lastAnnouncementText: announcement,
+    },
+    announcement,
+    sound: 'bell',
+    accepted: true,
+  };
+}
+
+/**
+ * Advanced Operations: Peak-hour simultaneous arrivals (brings 2 approaching trains in at once).
+ */
+export function triggerSimultaneousPeakArrivals(
+  simState: StationSimState,
+  trainState: TrainSimulationState,
+  nowMs = Date.now(),
+): TrainActionOutcome {
+  let activated = 0;
+  const trains = trainState.trains.map((t) => {
+    if ((t.status === 'Scheduled' || t.status === 'Delayed') && activated < 2) {
+      activated += 1;
+      return {
+        ...t,
+        status: 'Approaching' as const,
+        x: t.direction === 1 ? -(76 + activated * 12) : 76 + activated * 12,
+        speed: t.maxSpeed * 0.6,
+        holdingReason: 'Peak Hour Simultaneous Approach',
+      };
+    }
+    return t;
+  });
+
+  if (activated === 0) {
+    return injectUnexpectedTrain(simState, trainState, nowMs, 'Peak Surge Arrival');
+  }
+
+  const maxTracks = simState.chapterId === 2 ? 8 : 6;
+  const unlocked = Math.max(2, Math.min(maxTracks, simState.unlockedTracks || 2));
+  const occ = computeTrackOccupancy(trains);
+  const nextSim = applyXpAndRewards(
+    simState,
+    {
+      xpDelta: 20,
+      message: `Peak Rush Traffic: ${activated} simultaneous trains approaching! Coordinate platforms 1–${unlocked}.`,
+    },
+    nowMs,
+  );
+
+  return {
+    simState: nextSim,
+    trainState: {
+      ...trainState,
+      trains,
+      track1Occupancy: occ.track1,
+      track2Occupancy: occ.track2,
+      trackOccupancies: occ.byTrack,
+      alerts: buildSafetyAlerts(
+        trains,
+        occ.byTrack,
+        trainState.switchPosition,
+        signalsRecordFromSim(nextSim),
+        unlocked,
+      ),
+    },
+    announcement: `পিক আওয়ারে একাধিক ট্রেন একসাথে প্রবেশ করছে। নিরাপদ প্ল্যাটফর্ম সমন্বয় করুন।`,
+    sound: 'bell',
+    accepted: true,
+  };
+}
+
+/**
+ * Advanced Operations: Emergency platform diversion for an approaching/arriving/delayed train.
+ */
+export function divertTrainToPlatform(
+  simState: StationSimState,
+  trainState: TrainSimulationState,
+  trainId: string,
+  newPlatform: TrackId,
+  nowMs = Date.now(),
+): TrainActionOutcome {
+  const target = trainState.trains.find((t) => t.id === trainId);
+  if (!target) {
+    return { simState, trainState, announcement: null, sound: null, accepted: false };
+  }
+  const reset = {
+    ...trainState,
+    trains: trainState.trains.map((t) =>
+      t.id === trainId && (t.status === 'Arriving' || t.status === 'Approaching' || t.status === 'Delayed')
+        ? {
+            ...t,
+            status: 'Approaching' as const,
+            assignedPlatform: null,
+            x: t.direction === 1 ? Math.min(t.x, -48) : Math.max(t.x, 48),
+          }
+        : t,
+    ),
+  };
+  return assignTrainPlatform(simState, reset, trainId, newPlatform, nowMs);
 }

@@ -7,6 +7,8 @@ export const WORLD_BOUNDS = {
   maxZ: 64,
 } as const;
 
+export const CHAPTER2_MAX_Z = 82;
+
 export const PLATFORM_HEIGHT = 0.65;
 export const FOOTBRIDGE_HEIGHT = 4.85;
 export const PLAYER_RADIUS = 0.42;
@@ -96,6 +98,23 @@ export function groundHeightAt(x: number, z: number, currentY = 0, unlockedTrack
     height = Math.max(height, t * PLATFORM_HEIGHT);
   }
 
+  // Platform 5 / Chapter 2 Padma South Concourse (Unlocked at 7-8 Tracks: z in [56.5, 64.5])
+  if (unlockedTracks >= 7 && z >= 56.5 && z <= 64.5) {
+    if (x >= -30 && x <= 30) {
+      height = Math.max(height, PLATFORM_HEIGHT);
+    } else if (x >= -34 && x < -30) {
+      const t = (x - -34) / 4;
+      height = Math.max(height, t * PLATFORM_HEIGHT);
+    } else if (x > 30 && x <= 34) {
+      const t = 1 - (x - 30) / 4;
+      height = Math.max(height, t * PLATFORM_HEIGHT);
+    }
+  }
+  if (unlockedTracks >= 7 && x >= -6 && x <= 6 && z > 64.5 && z <= 67.0) {
+    const t = 1 - (z - 64.5) / 2.5;
+    height = Math.max(height, t * PLATFORM_HEIGHT);
+  }
+
   // Pedestrian Track Crossing Walkway (x in [16, 21])
   // Tracks 1 & 2 corridor (z in [-4.7, 4.7])
   if (x >= 16 && x <= 21 && z >= -4.7 && z <= 4.7) {
@@ -133,6 +152,20 @@ export function groundHeightAt(x: number, z: number, currentY = 0, unlockedTrack
       height = Math.max(height, trackPlankY + t * (PLATFORM_HEIGHT - trackPlankY));
     } else if (unlockedTracks >= 6 && z >= 36.4) {
       const t = (z - 36.4) / 1.1;
+      height = Math.max(height, trackPlankY + t * (PLATFORM_HEIGHT - trackPlankY));
+    } else {
+      height = Math.max(height, trackPlankY);
+    }
+  }
+
+  // Tracks 7 & 8 pedestrian plank crossing (z in [46.0, 56.5])
+  if (unlockedTracks >= 7 && x >= 16 && x <= 21 && z > 46.0 && z <= 56.5) {
+    const trackPlankY = 0.14;
+    if (z <= 47.1) {
+      const t = (47.1 - z) / 1.1;
+      height = Math.max(height, trackPlankY + t * (PLATFORM_HEIGHT - trackPlankY));
+    } else if (z >= 55.4) {
+      const t = (z - 55.4) / 1.1;
       height = Math.max(height, trackPlankY + t * (PLATFORM_HEIGHT - trackPlankY));
     } else {
       height = Math.max(height, trackPlankY);
@@ -179,7 +212,7 @@ export function groundHeightAt(x: number, z: number, currentY = 0, unlockedTrack
     }
   }
 
-  // South Terminal Concourse staircase (when Track 6 unlocked: z in [39.6, 41.4], x in [-28.0, -22.8])
+  // Platform 4 staircase (when Track 6 unlocked: z in [39.6, 41.4], x in [-28.0, -22.8])
   if (unlockedTracks >= 6 && z >= 39.6 && z <= 41.4 && x >= -28.0 && x <= -22.8 && currentY >= 0.4) {
     if (x <= -23.8) {
       const t = Math.max(0, Math.min(1, (x - -28.0) / 4.2));
@@ -192,15 +225,41 @@ export function groundHeightAt(x: number, z: number, currentY = 0, unlockedTrack
     }
   }
 
+  // Platform 5 staircase (when Track 7+ unlocked in Ch2: z in [58.2, 60.0], x in [-28.0, -22.8])
+  if (unlockedTracks >= 7 && z >= 58.2 && z <= 60.0 && x >= -28.0 && x <= -22.8 && currentY >= 0.4) {
+    if (x <= -23.8) {
+      const t = Math.max(0, Math.min(1, (x - -28.0) / 4.2));
+      const stairY = PLATFORM_HEIGHT + t * (FOOTBRIDGE_HEIGHT - PLATFORM_HEIGHT);
+      if (currentY >= stairY - 1.2) {
+        height = Math.max(height, stairY);
+      }
+    } else if (currentY >= 3.1) {
+      height = Math.max(height, FOOTBRIDGE_HEIGHT);
+    }
+  }
+
   // Elevated Footover Bridge span over active tracks
-  const bridgeMaxZ = unlockedTracks >= 6 ? 41.5 : unlockedTracks >= 4 ? 25.5 : 11.2;
+  const bridgeMaxZ =
+    unlockedTracks >= 7 ? 60.2 : unlockedTracks >= 6 ? 41.5 : unlockedTracks >= 4 ? 25.5 : 11.2;
   if (x >= -25.25 && x <= -22.75 && z >= -11.95 && z <= bridgeMaxZ && currentY >= 3.1) {
     height = Math.max(height, FOOTBRIDGE_HEIGHT);
   }
 
   // Level Road Crossing Asphalt Apron (x in [38.5, 45.5])
   const crossingMaxZ =
-    unlockedTracks >= 6 ? 37.8 : unlockedTracks >= 5 ? 31.8 : unlockedTracks >= 4 ? 21.3 : unlockedTracks >= 3 ? 15.3 : 4.8;
+    unlockedTracks >= 8
+      ? 56.5
+      : unlockedTracks >= 7
+        ? 50.5
+        : unlockedTracks >= 6
+          ? 37.8
+          : unlockedTracks >= 5
+            ? 31.8
+            : unlockedTracks >= 4
+              ? 21.3
+              : unlockedTracks >= 3
+                ? 15.3
+                : 4.8;
   if (x >= 38.5 && x <= 45.5 && z >= -4.8 && z <= crossingMaxZ) {
     height = Math.max(height, 0.12);
   }
@@ -218,6 +277,7 @@ export function resolveCircleAabbCollisions(
   actorY: number,
   radius: number,
   colliders: readonly ColliderBox[],
+  maxZBound: number = WORLD_BOUNDS.maxZ,
 ): { x: number; z: number; collided: boolean } {
   let x = posX;
   let z = posZ;
@@ -265,7 +325,7 @@ export function resolveCircleAabbCollisions(
 
   // Clamp to playable world perimeter
   const clampedX = Math.max(WORLD_BOUNDS.minX + radius, Math.min(WORLD_BOUNDS.maxX - radius, x));
-  const clampedZ = Math.max(WORLD_BOUNDS.minZ + radius, Math.min(WORLD_BOUNDS.maxZ - radius, z));
+  const clampedZ = Math.max(WORLD_BOUNDS.minZ + radius, Math.min(maxZBound - radius, z));
   if (clampedX !== x || clampedZ !== z) {
     collided = true;
   }

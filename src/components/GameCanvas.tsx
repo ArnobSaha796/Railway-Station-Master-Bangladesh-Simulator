@@ -2,9 +2,19 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EmergencyControlCallbacks } from './EmergencyDashboardModal';
+import type { StationOperationsCallbacks } from './StationOperationsModal';
 import type { StationUpgradeCallbacks } from './StationUpgradeModal';
 import type { TrainControlCallbacks } from './TrainDashboardModal';
 import { SoundEngine } from '../game/audio';
+import {
+  buildStationCardSummaries,
+  CHAPTER_CONFIGS,
+  createInitialMultiStationState,
+  evaluateChapterUnlockStatus,
+  type MultiStationGameState,
+  stepBackgroundStation,
+  syncSharedProfileWithStations,
+} from '../game/chapters';
 import { createFirstPersonArms } from '../game/models';
 import {
   broadcastMissionBanglaPa,
@@ -16,29 +26,54 @@ import {
   requestSecurityPatrolSweep,
   resolveNpcDialogueChoice,
 } from '../game/npcManager';
-import { groundHeightAt, PLAYER_RADIUS, resolveCircleAabbCollisions } from '../game/physics';
+import {
+  CHAPTER2_MAX_Z,
+  groundHeightAt,
+  PLAYER_RADIUS,
+  resolveCircleAabbCollisions,
+} from '../game/physics';
 import {
   buildStationUpgradeSnapshot,
   evaluateStationUpgrade,
+  getUpgradeTierSpec,
   purchaseNextStationUpgrade,
 } from '../game/progression';
 import {
-  loadStationShift,
-  saveStationShift,
-  type SavedStationShift,
+  assignStaffDuty,
+  claimTaskReward,
+  constructFacility,
+  getPrimaryDailyTask,
+  hireStaffMember,
+  orderClearVipPlatform,
+  recordFinanceExpense,
+  recordFinanceIncome,
+  recordTaskMetric,
+  repairFacility,
+  replaceAbsentStaff,
+  resolveOpsEmergency,
+  setStaffShift,
+  spawnOpsEmergency,
+  stepStationOperations,
+  syncVipPlatformOccupancy,
+  trainStaffMember,
+  triggerEmergencyVipSecurity,
+  upgradeFacility,
+  verifyVipCredential,
+} from '../game/stationOperations';
+import {
+  loadMultiStationShift,
+  saveMultiStationShift,
+  type SavedMultiStationShift,
 } from '../game/storage';
 import {
   advanceGameClock,
   type AutoWeatherState,
   createInitialAutoWeatherState,
-  createInitialSimState,
   formatGameTime,
   getDayPeriodLabel,
   getTrackSignal,
   nextSignalAspect,
   performStationInteraction,
-  STATION_NAME_BN,
-  STATION_NAME_EN,
   stepAutoWeather,
 } from '../game/rules';
 import {
@@ -47,19 +82,23 @@ import {
   authorizeTrainDeparture,
   BANGLA_SAFETY_ANNOUNCEMENTS,
   buildTrainBanglaAnnouncement,
-  createInitialTrainSimulation,
+  divertTrainToPlatform,
+  injectUnexpectedTrain,
   resolveTrainOperationalEvent,
   setTrackSignalAspect,
   stepTrainSimulation,
   syncTrainSimulationUnlockedTracks,
   toggleEmergencyStopTrain,
   toggleSwitchPosition,
+  triggerSimultaneousPeakArrivals,
 } from '../game/trainManager';
 import type {
   ActiveNpcDialogue,
   AudioSettings,
   CameraMode,
+  ChapterId,
   EmergencyDashboardSnapshot,
+  FacilityId,
   GamePhase,
   HudSnapshot,
   InteractablePoint,
@@ -67,6 +106,11 @@ import type {
   NpcFloatingBubble,
   PlayerState,
   SignalAspect,
+  StaffDuty,
+  StaffRole,
+  StaffShift,
+  StationOperationsSnapshot,
+  StationOperationsState,
   StationSimState,
   StationUpgradeSnapshot,
   TrackId,
@@ -74,7 +118,7 @@ import type {
   TrainSimulationState,
   WeatherMode,
 } from '../game/types';
-import { buildStationWorld } from '../game/world';
+import { buildStationWorld, type StationWorldHandle } from '../game/world';
 import type { DialogueOutcomeFeedback } from './NpcDialogueModal';
 
 export interface TouchControlInput {
@@ -101,6 +145,11 @@ export interface PersistenceActions {
   loadSavedShift: () => boolean;
 }
 
+export interface ChapterSwitchActions {
+  selectChapter: (chapterId: ChapterId) => void;
+  dismissCelebration: () => void;
+}
+
 interface GameCanvasProps {
   phase: GamePhase;
   cameraMode: CameraMode;
@@ -109,6 +158,8 @@ interface GameCanvasProps {
   dashboardOpen: boolean;
   upgradeDashboardOpen: boolean;
   emergencyDashboardOpen: boolean;
+  operationsModalOpen: boolean;
+  stationSelectorOpen: boolean;
   modalOpen: boolean;
   resetSignal: number;
   interactTriggerSignal: number;
@@ -117,6 +168,8 @@ interface GameCanvasProps {
   trainActionsRef: React.MutableRefObject<TrainControlCallbacks>;
   upgradeActionsRef: React.MutableRefObject<StationUpgradeCallbacks>;
   emergencyActionsRef: React.MutableRefObject<EmergencyControlCallbacks>;
+  opsActionsRef: React.MutableRefObject<StationOperationsCallbacks>;
+  chapterActionsRef: React.MutableRefObject<ChapterSwitchActions>;
   npcDialogueActionsRef: React.MutableRefObject<NpcDialogueCallbacks>;
   pointerLockActionsRef: React.MutableRefObject<PointerLockActions>;
   persistenceActionsRef: React.MutableRefObject<PersistenceActions>;
@@ -124,8 +177,10 @@ interface GameCanvasProps {
   onDashboardUpdate: (snapshot: TrainDashboardSnapshot) => void;
   onUpgradeUpdate: (snapshot: StationUpgradeSnapshot) => void;
   onEmergencyUpdate: (snapshot: EmergencyDashboardSnapshot) => void;
+  onOperationsUpdate: (snapshot: StationOperationsSnapshot) => void;
   onOpenTrainDashboard: () => void;
   onOpenUpgradeDashboard: () => void;
+  onOpenOperationsModal: () => void;
   onOpenNpcDialogue: (dialogue: ActiveNpcDialogue) => void;
   onBubblesUpdate: (bubbles: NpcFloatingBubble[]) => void;
   onAnnouncement: (text: string) => void;
@@ -133,7 +188,7 @@ interface GameCanvasProps {
   onPointerLockChange: (locked: boolean) => void;
   onEscUnlock: () => void;
   onWebglError: (msg: string) => void;
-  onRestoreEnvironment?: (saved: SavedStationShift) => void;
+  onRestoreEnvironment?: (saved: SavedMultiStationShift) => void;
   onSavedShiftChange?: () => void;
 }
 
@@ -180,6 +235,8 @@ export function GameCanvas({
   dashboardOpen,
   upgradeDashboardOpen,
   emergencyDashboardOpen,
+  operationsModalOpen,
+  stationSelectorOpen,
   modalOpen,
   resetSignal,
   interactTriggerSignal,
@@ -188,6 +245,8 @@ export function GameCanvas({
   trainActionsRef,
   upgradeActionsRef,
   emergencyActionsRef,
+  opsActionsRef,
+  chapterActionsRef,
   npcDialogueActionsRef,
   pointerLockActionsRef,
   persistenceActionsRef,
@@ -195,8 +254,10 @@ export function GameCanvas({
   onDashboardUpdate,
   onUpgradeUpdate,
   onEmergencyUpdate,
+  onOperationsUpdate,
   onOpenTrainDashboard,
   onOpenUpgradeDashboard,
+  onOpenOperationsModal,
   onOpenNpcDialogue,
   onBubblesUpdate,
   onAnnouncement,
@@ -217,6 +278,8 @@ export function GameCanvas({
   const dashboardOpenRef = useRef<boolean>(dashboardOpen);
   const upgradeDashboardOpenRef = useRef<boolean>(upgradeDashboardOpen);
   const emergencyDashboardOpenRef = useRef<boolean>(emergencyDashboardOpen);
+  const operationsModalOpenRef = useRef<boolean>(operationsModalOpen);
+  const stationSelectorOpenRef = useRef<boolean>(stationSelectorOpen);
   const modalOpenRef = useRef<boolean>(modalOpen);
   const intentionalUnlockRef = useRef<boolean>(false);
   const clearInputsRef = useRef<() => void>(() => {});
@@ -224,8 +287,10 @@ export function GameCanvas({
   const onDashboardUpdateRef = useRef(onDashboardUpdate);
   const onUpgradeUpdateRef = useRef(onUpgradeUpdate);
   const onEmergencyUpdateRef = useRef(onEmergencyUpdate);
+  const onOperationsUpdateRef = useRef(onOperationsUpdate);
   const onOpenTrainDashboardRef = useRef(onOpenTrainDashboard);
   const onOpenUpgradeDashboardRef = useRef(onOpenUpgradeDashboard);
+  const onOpenOperationsModalRef = useRef(onOpenOperationsModal);
   const onOpenNpcDialogueRef = useRef(onOpenNpcDialogue);
   const onBubblesUpdateRef = useRef(onBubblesUpdate);
   const onAnnouncementRef = useRef(onAnnouncement);
@@ -242,15 +307,20 @@ export function GameCanvas({
   dashboardOpenRef.current = dashboardOpen;
   upgradeDashboardOpenRef.current = upgradeDashboardOpen;
   emergencyDashboardOpenRef.current = emergencyDashboardOpen;
+  operationsModalOpenRef.current = operationsModalOpen;
+  stationSelectorOpenRef.current = stationSelectorOpen;
   modalOpenRef.current = modalOpen;
 
-  const simStateRef = useRef<StationSimState>(createInitialSimState());
-  const trainStateRef = useRef<TrainSimulationState>(createInitialTrainSimulation(1));
+  const multiStateRef = useRef<MultiStationGameState>(createInitialMultiStationState());
+  const simStateRef = useRef<StationSimState>(multiStateRef.current.chapter1.simState);
+  const trainStateRef = useRef<TrainSimulationState>(multiStateRef.current.chapter1.trainState);
+  const opsStateRef = useRef<StationOperationsState>(multiStateRef.current.chapter1.opsState);
   const triggerResetRef = useRef<() => void>(() => {});
   const triggerInteractRef = useRef<() => void>(() => {});
   const pushDashboardRef = useRef<(force?: boolean) => void>(() => {});
   const pushUpgradeRef = useRef<(force?: boolean) => void>(() => {});
   const pushEmergencyRef = useRef<(force?: boolean) => void>(() => {});
+  const pushOperationsRef = useRef<(force?: boolean) => void>(() => {});
 
   useEffect(() => {
     soundRef.current?.setActive(phase === 'playing');
@@ -281,6 +351,7 @@ export function GameCanvas({
     }
     if (dashboardOpen) {
       pushDashboardRef.current(true);
+      pushOperationsRef.current(true);
     }
     if (upgradeDashboardOpen) {
       pushUpgradeRef.current(true);
@@ -288,7 +359,17 @@ export function GameCanvas({
     if (emergencyDashboardOpen) {
       pushEmergencyRef.current(true);
     }
-  }, [modalOpen, dashboardOpen, upgradeDashboardOpen, emergencyDashboardOpen]);
+    if (operationsModalOpen || stationSelectorOpen) {
+      pushOperationsRef.current(true);
+    }
+  }, [
+    modalOpen,
+    dashboardOpen,
+    upgradeDashboardOpen,
+    emergencyDashboardOpen,
+    operationsModalOpen,
+    stationSelectorOpen,
+  ]);
 
   useEffect(() => {
     cameraModeRef.current = cameraMode;
@@ -329,12 +410,20 @@ export function GameCanvas({
   }, [onEmergencyUpdate]);
 
   useEffect(() => {
+    onOperationsUpdateRef.current = onOperationsUpdate;
+  }, [onOperationsUpdate]);
+
+  useEffect(() => {
     onOpenTrainDashboardRef.current = onOpenTrainDashboard;
   }, [onOpenTrainDashboard]);
 
   useEffect(() => {
     onOpenUpgradeDashboardRef.current = onOpenUpgradeDashboard;
   }, [onOpenUpgradeDashboard]);
+
+  useEffect(() => {
+    onOpenOperationsModalRef.current = onOpenOperationsModal;
+  }, [onOpenOperationsModal]);
 
   useEffect(() => {
     onOpenNpcDialogueRef.current = onOpenNpcDialogue;
@@ -451,7 +540,12 @@ export function GameCanvas({
     soundRef.current = sound;
 
     const maxAnisotropy = isSoftwareGl ? 1 : Math.min(4, renderer.capabilities.getMaxAnisotropy());
-    const world = buildStationWorld(maxAnisotropy, isSoftwareGl);
+    let currentWorldChapterId: ChapterId = multiStateRef.current.activeChapterId;
+    let world: StationWorldHandle = buildStationWorld(
+      maxAnisotropy,
+      isSoftwareGl,
+      currentWorldChapterId,
+    );
 
     let envTex: THREE.Texture | null = null;
     if (!isSoftwareGl) {
@@ -467,6 +561,21 @@ export function GameCanvas({
     const fpArms = createFirstPersonArms();
     fpArms.group.visible = false;
     camera.add(fpArms.group);
+
+    const rebuildWorldForChapter = (targetChapterId: ChapterId) => {
+      if (targetChapterId === currentWorldChapterId) return;
+      world.scene.remove(camera);
+      world.dispose();
+      currentWorldChapterId = targetChapterId;
+      world = buildStationWorld(maxAnisotropy, isSoftwareGl, targetChapterId);
+      if (envTex) {
+        world.scene.environment = envTex;
+      }
+      world.scene.add(camera);
+      if (!isSoftwareGl) {
+        renderer.compile(world.scene, camera);
+      }
+    };
 
     const player: PlayerState = {
       x: -2,
@@ -585,8 +694,54 @@ export function GameCanvas({
     let lastDashPushTime = 0;
     let lastUpgradePushTime = 0;
     let lastEmergencyPushTime = 0;
+    let lastOpsPushTime = 0;
     let lastBubblePushTime = 0;
     let lastBubbleSig = '';
+
+    const syncActiveRuntime = (
+      nextSim = simStateRef.current,
+      nextTrain = trainStateRef.current,
+      nextOps = opsStateRef.current,
+    ) => {
+      simStateRef.current = nextSim;
+      trainStateRef.current = nextTrain;
+      opsStateRef.current = nextOps;
+      const activeId = multiStateRef.current.activeChapterId;
+      if (activeId === 2) {
+        multiStateRef.current.chapter2 = {
+          chapterId: 2,
+          simState: nextSim,
+          trainState: nextTrain,
+          opsState: nextOps,
+        };
+      } else {
+        multiStateRef.current.chapter1 = {
+          chapterId: 1,
+          simState: nextSim,
+          trainState: nextTrain,
+          opsState: nextOps,
+        };
+      }
+      multiStateRef.current.sharedProfile = syncSharedProfileWithStations(
+        multiStateRef.current.sharedProfile,
+        multiStateRef.current.chapter1,
+        multiStateRef.current.chapter2,
+        nextSim,
+      );
+      const unlockEval = evaluateChapterUnlockStatus(
+        multiStateRef.current.chapter1.simState,
+        multiStateRef.current.chapter1.opsState,
+        multiStateRef.current.celebrationDismissed,
+      );
+      if (unlockEval.chapter2Unlocked && !multiStateRef.current.chapter2Unlocked) {
+        multiStateRef.current.chapter1Completed = true;
+        multiStateRef.current.chapter2Unlocked = true;
+        sound.playAchievementUnlock();
+        sound.playBengaliAnnouncement(
+          'অভিনন্দন! অধ্যায় ১ সম্পন্ন হয়েছে। পদ্মা সেন্ট্রাল টার্মিনাল এখন আনলক হয়েছে!',
+        );
+      }
+    };
 
     function pushDashboardSnapshot(force = false) {
       const now = performance.now();
@@ -635,10 +790,63 @@ export function GameCanvas({
     }
     pushEmergencyRef.current = pushEmergencySnapshot;
 
+    function pushOperationsSnapshot(force = false) {
+      const now = performance.now();
+      if (
+        !force &&
+        !operationsModalOpenRef.current &&
+        !stationSelectorOpenRef.current &&
+        !dashboardOpenRef.current
+      ) {
+        return;
+      }
+      if (!force && now - lastOpsPushTime < 240) return;
+      lastOpsPushTime = now;
+      syncActiveRuntime();
+      const activeId = multiStateRef.current.activeChapterId;
+      const cfg = CHAPTER_CONFIGS[activeId];
+      const s = simStateRef.current;
+      const o = opsStateRef.current;
+      const unlockStatus = evaluateChapterUnlockStatus(
+        multiStateRef.current.chapter1.simState,
+        multiStateRef.current.chapter1.opsState,
+        multiStateRef.current.celebrationDismissed,
+      );
+      if (multiStateRef.current.chapter2Unlocked) {
+        unlockStatus.chapter1Completed = true;
+        unlockStatus.chapter2Unlocked = true;
+      }
+      onOperationsUpdateRef.current({
+        chapterId: activeId,
+        stationName: cfg.stationName,
+        money: s.money,
+        reputation: s.reputation,
+        satisfaction: s.satisfaction,
+        tasks: o.tasks,
+        activeOpsEvents: o.activeOpsEvents,
+        recentResolvedOps: o.recentResolvedOps,
+        staff: o.staff,
+        facilities: o.facilities,
+        finance: o.finance,
+        faultedSignalTracks: o.faultedSignalTracks,
+        obstructedTracks: o.obstructedTracks,
+        powerOutageActive: o.powerOutageActive,
+        paSystemFailed: o.paSystemFailed,
+        vipProtocol: o.vipProtocol,
+        chapterUnlockStatus: unlockStatus,
+        stationCards: buildStationCardSummaries(multiStateRef.current),
+      });
+    }
+    pushOperationsRef.current = pushOperationsSnapshot;
+
     function pushHudSnapshot(force = false) {
       const now = performance.now();
+      syncActiveRuntime();
+      const activeId = multiStateRef.current.activeChapterId;
+      const cfg = CHAPTER_CONFIGS[activeId];
       const s = simStateRef.current;
       const ts = trainStateRef.current;
+      const o = opsStateRef.current;
       const npcSt = world.getNpcState();
       const nearby = getNearbyInteractionTarget();
       const prompt = nearby
@@ -709,9 +917,12 @@ export function GameCanvas({
         4: Boolean(ts.trackOccupancies[4]?.occupied),
         5: Boolean(ts.trackOccupancies[5]?.occupied),
         6: Boolean(ts.trackOccupancies[6]?.occupied),
+        7: Boolean(ts.trackOccupancies[7]?.occupied),
+        8: Boolean(ts.trackOccupancies[8]?.occupied),
       };
 
       const primaryMission = npcSt.missions[0] ? { ...npcSt.missions[0] } : null;
+      const primaryDaily = getPrimaryDailyTask(o);
       const availableOfficersCount = npcSt.npcs.filter(
         (n) => (n.role === 'railway_police' || n.role === 'bd_police') && !n.assignedMissionId,
       ).length;
@@ -719,21 +930,31 @@ export function GameCanvas({
       const missionSig = primaryMission
         ? `${primaryMission.id}:${primaryMission.status}:${Math.ceil(primaryMission.timeRemainingSec)}:${primaryMission.cluesCollected.length}`
         : '';
+      const taskSig = primaryDaily
+        ? `${primaryDaily.id}:${primaryDaily.current}:${primaryDaily.completed ? 1 : 0}:${primaryDaily.claimed ? 1 : 0}`
+        : '';
       const trainSig = activeTrainSummary
         ? `${activeTrainSummary.trainId}:${activeTrainSummary.status}:${activeTrainSummary.currentPassengers}:${activeTrainSummary.doorState}:${activeTrainSummary.departureStage}:${activeTrainSummary.hasOperationalEvent}`
         : '';
-      const trackSig = ([1, 2, 3, 4, 5, 6] as const)
+      const trackSig = ([1, 2, 3, 4, 5, 6, 7, 8] as const)
         .map((t) => `${getTrackSignal(s, t)}:${trackOccupied[t] ? 1 : 0}`)
         .join(',');
-      const sig = `${s.dayNumber}|${s.stationLevel}|${s.unlockedTracks}|${upgradeEval.canUpgradeNow}|${s.level}|${s.xp}|${s.money}|${s.reputation}|${s.satisfaction}|${s.securityRating}|${s.crimesPrevented}|${s.emergenciesResolved}|${s.complaints}|${s.successfulInteractions}|${npcSt.npcs.length}|${npcSt.missions.length}|${missionSig}|${trainSig}|${availableOfficersCount}|${incId}|${timeStr}|${trackSig}|${ts.switchPosition}|${s.crossingGateClosed}|${urgentCount}|${ts.alerts.length}|${prompt?.id ?? ''}|${prompt?.title ?? ''}|${s.lastEventTimestamp}`;
+      const vipSig = o.vipProtocol?.active
+        ? `${o.vipProtocol.eventId}:${o.vipProtocol.corridorEvacuationPct}:${o.vipProtocol.clearedPlatforms.join(',')}:${Math.ceil(o.vipProtocol.timeRemainingSec)}`
+        : '0';
+      const sig = `${activeId}|${multiStateRef.current.chapter2Unlocked}|${multiStateRef.current.celebrationDismissed}|${s.dayNumber}|${s.stationLevel}|${s.unlockedTracks}|${upgradeEval.canUpgradeNow}|${s.level}|${s.xp}|${s.money}|${s.reputation}|${s.satisfaction}|${s.securityRating}|${s.crimesPrevented}|${s.emergenciesResolved}|${s.complaints}|${s.successfulInteractions}|${npcSt.npcs.length}|${npcSt.missions.length}|${o.activeOpsEvents.length}|${o.powerOutageActive}|${vipSig}|${taskSig}|${missionSig}|${trainSig}|${availableOfficersCount}|${incId}|${timeStr}|${trackSig}|${ts.switchPosition}|${s.crossingGateClosed}|${urgentCount}|${ts.alerts.length}|${prompt?.id ?? ''}|${prompt?.title ?? ''}|${s.lastEventTimestamp}`;
       if (!force && sig === lastHudSig && now - lastHudPushTime < 450) {
         return;
       }
       lastHudSig = sig;
       lastHudPushTime = now;
       onHudUpdateRef.current({
-        stationName: STATION_NAME_EN,
-        stationNameBn: STATION_NAME_BN,
+        chapterId: activeId,
+        chapter2Unlocked: multiStateRef.current.chapter2Unlocked,
+        chapter1JustCompleted:
+          multiStateRef.current.chapter2Unlocked && !multiStateRef.current.celebrationDismissed,
+        stationName: cfg.stationName,
+        stationNameBn: cfg.stationNameBn,
         dayNumber: ts.dayNumber,
         stationLevel: s.stationLevel,
         unlockedTracks: s.unlockedTracks,
@@ -757,7 +978,22 @@ export function GameCanvas({
         activeCrowdCount: npcSt.npcs.length,
         activeIncident: npcSt.activeIncident,
         activeMissionsCount: npcSt.missions.length,
+        activeOpsCount: o.activeOpsEvents.length,
         primaryMission,
+        activeDailyTask: primaryDaily
+          ? {
+              id: primaryDaily.id,
+              title: primaryDaily.title,
+              current: primaryDaily.current,
+              target: primaryDaily.target,
+              completed: primaryDaily.completed,
+              claimed: primaryDaily.claimed,
+            }
+          : null,
+        powerOutageActive: o.powerOutageActive,
+        paSystemFailed: o.paSystemFailed,
+        vipSecurityActive: Boolean(o.vipProtocol?.active),
+        vipLockedPlatforms: o.vipProtocol?.active ? o.vipProtocol.lockedPlatforms : [],
         availableOfficersCount,
         timeFormatted: timeStr,
         dayPeriodLabel: getDayPeriodLabel(s.gameMinutes),
@@ -778,6 +1014,23 @@ export function GameCanvas({
       });
     }
 
+    const playGuardedAnnouncement = (text: string | null) => {
+      if (!text) return;
+      if (opsStateRef.current.paSystemFailed) {
+        onAnnouncementRef.current('[PA OFFLINE — Repair Public Address System in Ops Hub!]');
+        return;
+      }
+      sound.playBengaliAnnouncement(text);
+    };
+
+    const pushAllSnapshots = () => {
+      pushHudSnapshot(true);
+      pushDashboardSnapshot(true);
+      pushUpgradeSnapshot(true);
+      pushEmergencySnapshot(true);
+      pushOperationsSnapshot(true);
+    };
+
     // Wire imperative Train Control Dashboard callbacks directly into simulation refs
     trainActionsRef.current = {
       assignPlatform: (trainId: string, platform: TrackId) => {
@@ -790,9 +1043,9 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
-        playOutcomeEffects(res.sound, res.announcement);
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
       },
       setSignal: (track: TrackId, aspect: SignalAspect) => {
         const res = setTrackSignalAspect(
@@ -804,9 +1057,9 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
-        playOutcomeEffects(res.sound, res.announcement);
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
       },
       toggleSwitch: () => {
         const res = toggleSwitchPosition(
@@ -816,9 +1069,9 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
-        playOutcomeEffects(res.sound, res.announcement);
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
       },
       toggleCrossingGate: () => {
         const res = performStationInteraction(
@@ -828,8 +1081,7 @@ export function GameCanvas({
         );
         simStateRef.current = res.nextState;
         playOutcomeEffects(res.sound, null);
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
+        pushAllSnapshots();
       },
       toggleEmergencyStop: (trainId: string) => {
         const res = toggleEmergencyStopTrain(
@@ -840,11 +1092,12 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
-        playOutcomeEffects(res.sound, res.announcement);
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
       },
       authorizeDeparture: (trainId: string) => {
+        const dispatchedTrain = trainStateRef.current.trains.find((t) => t.id === trainId);
         const res = authorizeTrainDeparture(
           simStateRef.current,
           trainStateRef.current,
@@ -853,10 +1106,22 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
-        playOutcomeEffects(res.sound, res.announcement);
+        if (res.accepted) {
+          const isCargo = dispatchedTrain?.category === 'freight';
+          const revenue = isCargo
+            ? 140
+            : 110 + Math.round((dispatchedTrain?.currentPassengers ?? 0) * 0.65);
+          opsStateRef.current = recordFinanceIncome(
+            opsStateRef.current,
+            isCargo ? 'cargo' : 'ticket',
+            revenue,
+          );
+          opsStateRef.current = recordTaskMetric(opsStateRef.current, 'on_time_dispatches', 1);
+        }
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
         persistCurrentShift();
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
+        pushAllSnapshots();
       },
       advanceDepartureSequence: (
         trainId: string,
@@ -874,9 +1139,9 @@ export function GameCanvas({
         if (step === 'close_doors' && res.accepted) {
           sound.playDoorChime(false);
         }
-        playOutcomeEffects(res.sound, res.announcement);
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
       },
       resolveOperationalEvent: (trainId: string, choice: 'primary' | 'secondary' = 'primary') => {
         const res = resolveTrainOperationalEvent(
@@ -888,9 +1153,12 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
-        playOutcomeEffects(res.sound, res.announcement);
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
+        if (res.accepted) {
+          opsStateRef.current = recordTaskMetric(opsStateRef.current, 'passenger_assists', 1);
+        }
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
       },
       announceTrain: (trainId: string) => {
         const train = trainStateRef.current.trains.find((t) => t.id === trainId);
@@ -902,17 +1170,21 @@ export function GameCanvas({
               ? 'boarding'
               : 'arrival';
         const text = buildTrainBanglaAnnouncement(train, kind);
-        sound.playBengaliAnnouncement(text);
+        playGuardedAnnouncement(text);
         pushDashboardSnapshot(true);
       },
       announceSafety: () => {
-        sound.playBengaliAnnouncement(BANGLA_SAFETY_ANNOUNCEMENTS[0]);
+        playGuardedAnnouncement(BANGLA_SAFETY_ANNOUNCEMENTS[0]);
       },
     };
 
     upgradeActionsRef.current = {
       purchaseUpgrade: () => {
         const nowMs = performance.now();
+        const nextTier = getUpgradeTierSpec(
+          (simStateRef.current.stationLevel || 1) + 1,
+          simStateRef.current.chapterId === 2 ? 2 : 1,
+        );
         const outcome = purchaseNextStationUpgrade(simStateRef.current, nowMs);
         simStateRef.current = outcome.simState;
         if (outcome.accepted) {
@@ -921,17 +1193,19 @@ export function GameCanvas({
             outcome.newUnlockedTracks,
             simStateRef.current.gameMinutes,
           );
+          opsStateRef.current = recordFinanceExpense(
+            opsStateRef.current,
+            'construction',
+            nextTier.costCoins,
+          );
+          opsStateRef.current = recordTaskMetric(opsStateRef.current, 'station_upgrades', 1);
           sound.playUpgradeConstructionFanfare();
-          if (outcome.announcement) {
-            sound.playBengaliAnnouncement(outcome.announcement);
-          }
+          playGuardedAnnouncement(outcome.announcement);
           persistCurrentShift();
         } else {
           sound.playSignalLever();
         }
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
-        pushUpgradeSnapshot(true);
+        pushAllSnapshots();
       },
     };
 
@@ -949,8 +1223,7 @@ export function GameCanvas({
           sound.playRadioChirp();
           sound.playPoliceWhistle();
         }
-        pushHudSnapshot(true);
-        pushEmergencySnapshot(true);
+        pushAllSnapshots();
       },
       requestPatrolSweep: () => {
         const res = requestSecurityPatrolSweep(
@@ -960,22 +1233,294 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         sound.playRadioChirp();
-        pushHudSnapshot(true);
-        pushEmergencySnapshot(true);
+        pushAllSnapshots();
       },
       broadcastEmergencyPa: (missionId: string) => {
         const paText = broadcastMissionBanglaPa(world.getNpcState(), missionId);
         if (paText) {
           sound.playEmergencySiren();
-          sound.playBengaliAnnouncement(paText);
+          playGuardedAnnouncement(paText);
           simStateRef.current = {
             ...simStateRef.current,
             lastEventMessage: `Bangla Emergency PA broadcast issued.`,
             lastEventTimestamp: performance.now(),
           };
-          pushHudSnapshot(true);
-          pushEmergencySnapshot(true);
+          pushAllSnapshots();
         }
+      },
+    };
+
+    opsActionsRef.current = {
+      claimTask: (taskId: string) => {
+        const res = claimTaskReward(simStateRef.current, opsStateRef.current, taskId, performance.now());
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playAchievementUnlock();
+          persistCurrentShift();
+        }
+        pushAllSnapshots();
+      },
+      resolveOpsEvent: (eventId: string) => {
+        const res = resolveOpsEmergency(
+          simStateRef.current,
+          opsStateRef.current,
+          eventId,
+          performance.now(),
+          false,
+        );
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playCoin();
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      spawnOpsEvent: () => {
+        const res = spawnOpsEmergency(simStateRef.current, opsStateRef.current);
+        opsStateRef.current = res.opsState;
+        if (res.event) {
+          sound.playRadioChirp();
+          simStateRef.current = {
+            ...simStateRef.current,
+            lastEventMessage: `Ops Alert: ${res.event.title} at ${res.event.locationLabel}.`,
+            lastEventTimestamp: performance.now(),
+          };
+        }
+        pushAllSnapshots();
+      },
+      dispatchUnexpectedTrain: () => {
+        const res = injectUnexpectedTrain(simStateRef.current, trainStateRef.current, performance.now());
+        simStateRef.current = res.simState;
+        trainStateRef.current = res.trainState;
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
+      },
+      triggerSimultaneousArrivals: () => {
+        const res = triggerSimultaneousPeakArrivals(
+          simStateRef.current,
+          trainStateRef.current,
+          performance.now(),
+        );
+        simStateRef.current = res.simState;
+        trainStateRef.current = res.trainState;
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
+      },
+      divertTrainToPlatform: (trainId: string, track: TrackId) => {
+        const res = divertTrainToPlatform(
+          simStateRef.current,
+          trainStateRef.current,
+          trainId,
+          track,
+          performance.now(),
+        );
+        simStateRef.current = res.simState;
+        trainStateRef.current = res.trainState;
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
+      },
+      hireStaff: (role: StaffRole) => {
+        const res = hireStaffMember(simStateRef.current, opsStateRef.current, role, performance.now());
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playCoin();
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      assignStaffDuty: (staffId: string, duty: StaffDuty) => {
+        opsStateRef.current = assignStaffDuty(opsStateRef.current, staffId, duty);
+        sound.playSignalLever();
+        pushAllSnapshots();
+      },
+      changeStaffShift: (staffId: string, shift: StaffShift) => {
+        opsStateRef.current = setStaffShift(opsStateRef.current, staffId, shift);
+        sound.playSignalLever();
+        pushAllSnapshots();
+      },
+      trainStaff: (staffId: string) => {
+        const res = trainStaffMember(simStateRef.current, opsStateRef.current, staffId, performance.now());
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playAchievementUnlock();
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      replaceAbsentStaff: (staffId: string) => {
+        const res = replaceAbsentStaff(simStateRef.current, opsStateRef.current, staffId, performance.now());
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playRadioChirp();
+        }
+        pushAllSnapshots();
+      },
+      constructFacility: (facilityId: FacilityId) => {
+        const res = constructFacility(simStateRef.current, opsStateRef.current, facilityId, performance.now());
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playUpgradeConstructionFanfare();
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      upgradeFacility: (facilityId: FacilityId) => {
+        const res = upgradeFacility(simStateRef.current, opsStateRef.current, facilityId, performance.now());
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playUpgradeConstructionFanfare();
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      repairFacility: (facilityId: FacilityId) => {
+        const res = repairFacility(simStateRef.current, opsStateRef.current, facilityId, performance.now());
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playCoin();
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      triggerVipSecurity: () => {
+        const res = triggerEmergencyVipSecurity(
+          simStateRef.current,
+          opsStateRef.current,
+          performance.now(),
+        );
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playEmergencySiren();
+          sound.playRadioChirp();
+          playGuardedAnnouncement(res.announcement);
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      clearVipPlatform: (platformId: TrackId) => {
+        const res = orderClearVipPlatform(
+          simStateRef.current,
+          opsStateRef.current,
+          platformId,
+          performance.now(),
+        );
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          if (res.completed) {
+            sound.playAchievementUnlock();
+          } else {
+            sound.playPoliceWhistle();
+          }
+          playGuardedAnnouncement(res.announcement);
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      verifyVipCredential: (credentialId: string, decision: 'verify' | 'reject') => {
+        const res = verifyVipCredential(
+          simStateRef.current,
+          opsStateRef.current,
+          credentialId,
+          decision,
+          performance.now(),
+        );
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.completed) {
+          sound.playAchievementUnlock();
+          playGuardedAnnouncement(res.announcement);
+          persistCurrentShift();
+        } else if (res.accepted) {
+          sound.playCoin();
+          persistCurrentShift();
+        } else {
+          sound.playEmergencySiren();
+        }
+        pushAllSnapshots();
+      },
+    };
+
+    const switchActiveChapter = (targetChapterId: ChapterId) => {
+      if (targetChapterId === 2 && !multiStateRef.current.chapter2Unlocked) {
+        return;
+      }
+      syncActiveRuntime();
+      if (multiStateRef.current.activeChapterId === targetChapterId) {
+        pushAllSnapshots();
+        return;
+      }
+      multiStateRef.current.activeChapterId = targetChapterId;
+      const targetRuntime =
+        targetChapterId === 2 ? multiStateRef.current.chapter2 : multiStateRef.current.chapter1;
+      const prof = multiStateRef.current.sharedProfile;
+      const syncedTargetSim: StationSimState = {
+        ...targetRuntime.simState,
+        level: Math.max(targetRuntime.simState.level, prof.level),
+        xp: Math.max(targetRuntime.simState.xp, prof.xp),
+        xpToNext: prof.xpToNext,
+        achievements: prof.achievements.map((a) => ({ ...a })),
+        lastEventMessage: `Commanding ${CHAPTER_CONFIGS[targetChapterId].stationName} (${CHAPTER_CONFIGS[targetChapterId].stationNameBn}).`,
+        lastEventTimestamp: performance.now(),
+      };
+      simStateRef.current = syncedTargetSim;
+      trainStateRef.current = targetRuntime.trainState;
+      opsStateRef.current = targetRuntime.opsState;
+      rebuildWorldForChapter(targetChapterId);
+      world.resetNpcs();
+      player.x = -2;
+      player.z = -7.2;
+      player.y = groundHeightAt(player.x, player.z, 0.65, simStateRef.current.unlockedTracks);
+      player.vy = 0;
+      player.yaw = Math.PI * 0.48;
+      player.grounded = true;
+      player.speed = 0;
+      keys.clear();
+      onBubblesUpdateRef.current([]);
+      sound.playStationBell();
+      playGuardedAnnouncement(
+        targetChapterId === 2
+          ? 'স্বাগতম পদ্মা সেন্ট্রাল টার্মিনালে। ৭ এবং ৮ নম্বর উচ্চ-গতির ট্র্যাক এখন সক্রিয়!'
+          : 'শাপলাপুর জংশন নিয়ন্ত্রণ কক্ষে স্বাগতম।',
+      );
+      persistCurrentShift();
+      pushAllSnapshots();
+    };
+
+    chapterActionsRef.current = {
+      selectChapter: switchActiveChapter,
+      dismissCelebration: () => {
+        multiStateRef.current.celebrationDismissed = true;
+        persistCurrentShift();
+        pushAllSnapshots();
       },
     };
 
@@ -989,6 +1534,12 @@ export function GameCanvas({
           performance.now(),
         );
         simStateRef.current = res.simState;
+        if (choice.isCorrect) {
+          opsStateRef.current = recordTaskMetric(opsStateRef.current, 'passenger_assists', 1);
+        }
+        if (res.soundHint === 'whistle' || res.soundHint === 'siren') {
+          opsStateRef.current = recordTaskMetric(opsStateRef.current, 'security_prevented', 1);
+        }
         if (res.soundHint === 'whistle') {
           sound.playPoliceWhistle();
         } else if (res.soundHint === 'radio') {
@@ -1004,12 +1555,11 @@ export function GameCanvas({
           sound.playAchievementUnlock();
         }
         if (res.announcementBn) {
-          sound.playBengaliAnnouncement(res.announcementBn);
+          playGuardedAnnouncement(res.announcementBn);
         } else {
           sound.speakBanglaLine(choice.replyBn, 0.98);
         }
-        pushHudSnapshot(true);
-        pushEmergencySnapshot(true);
+        pushAllSnapshots();
         return {
           replyBn: choice.replyBn,
           replyEn: choice.replyEn,
@@ -1040,12 +1590,38 @@ export function GameCanvas({
           sound.speakBanglaLine(dialogue.questionBn, 0.96);
           onOpenNpcDialogueRef.current(dialogue);
         }
-        pushHudSnapshot(true);
-        pushEmergencySnapshot(true);
+        pushAllSnapshots();
         return;
       }
 
       const item = nearby.item;
+      if (item.id === 'operations_desk') {
+        sound.playStationBell();
+        onOpenOperationsModalRef.current();
+        pushAllSnapshots();
+        return;
+      }
+
+      if (item.id === 'ops_repair_point' && item.missionId) {
+        const res = resolveOpsEmergency(
+          simStateRef.current,
+          opsStateRef.current,
+          item.missionId,
+          now,
+          false,
+        );
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          sound.playCoin();
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+        return;
+      }
+
       if (item.id === 'train_operational_event' && item.trainId) {
         const res = resolveTrainOperationalEvent(
           simStateRef.current,
@@ -1056,10 +1632,12 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
-        playOutcomeEffects(res.sound, res.announcement);
-        pushHudSnapshot(true);
-        pushDashboardSnapshot(true);
-        pushEmergencySnapshot(true);
+        if (res.accepted) {
+          opsStateRef.current = recordTaskMetric(opsStateRef.current, 'passenger_assists', 1);
+        }
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
+        pushAllSnapshots();
         return;
       }
 
@@ -1072,6 +1650,8 @@ export function GameCanvas({
         );
         simStateRef.current = hazardRes.simState;
         if (hazardRes.resolved) {
+          opsStateRef.current = recordTaskMetric(opsStateRef.current, 'emergencies_resolved', 1);
+          opsStateRef.current = recordTaskMetric(opsStateRef.current, 'security_prevented', 1);
           if (hazardRes.sound === 'whistle') sound.playPoliceWhistle();
           else if (hazardRes.sound === 'radio') sound.playRadioChirp();
           else sound.playCoin();
@@ -1079,8 +1659,7 @@ export function GameCanvas({
             sound.playAchievementUnlock();
           }
         }
-        pushHudSnapshot(true);
-        pushEmergencySnapshot(true);
+        pushAllSnapshots();
         return;
       }
 
@@ -1090,7 +1669,9 @@ export function GameCanvas({
         item.id === 'signal_track3' ||
         item.id === 'signal_track4' ||
         item.id === 'signal_track5' ||
-        item.id === 'signal_track6'
+        item.id === 'signal_track6' ||
+        item.id === 'signal_track7' ||
+        item.id === 'signal_track8'
       ) {
         const track = Number(item.id.replace('signal_track', '')) as TrackId;
         const curr = getTrackSignal(simStateRef.current, track);
@@ -1098,7 +1679,8 @@ export function GameCanvas({
         const res = setTrackSignalAspect(simStateRef.current, trainStateRef.current, track, nextAspect, now);
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
-        playOutcomeEffects(res.sound, res.announcement);
+        playOutcomeEffects(res.sound, null);
+        playGuardedAnnouncement(res.announcement);
       } else {
         const result = performStationInteraction(simStateRef.current, item.id, now, item.title);
         simStateRef.current = result.nextState;
@@ -1110,18 +1692,15 @@ export function GameCanvas({
           onOpenUpgradeDashboardRef.current();
         }
       }
-      pushHudSnapshot(true);
-      pushDashboardSnapshot(true);
-      pushUpgradeSnapshot(true);
-      pushEmergencySnapshot(true);
+      pushAllSnapshots();
     };
 
     triggerInteractRef.current = executeInteraction;
 
     const persistCurrentShift = (): boolean => {
-      const ok = saveStationShift({
-        simState: simStateRef.current,
-        trainState: trainStateRef.current,
+      syncActiveRuntime();
+      const ok = saveMultiStationShift({
+        multiState: multiStateRef.current,
         cameraMode: cameraModeRef.current,
         weather: weatherRef.current,
         audioSettings: audioSettingsRef.current,
@@ -1133,30 +1712,30 @@ export function GameCanvas({
     };
 
     const restoreSavedShift = (): boolean => {
-      const saved = loadStationShift();
+      const saved = loadMultiStationShift();
       if (!saved) return false;
-      const baseSim = createInitialSimState();
-      const restoredTracks = Math.max(2, Math.min(6, saved.simState.unlockedTracks ?? 2));
-      const trackSignals = {
-        ...baseSim.trackSignals,
-        ...(saved.simState.trackSignals ?? {}),
-      };
+      multiStateRef.current = saved.multiState;
+      const activeId = saved.multiState.activeChapterId;
+      const activeRuntime =
+        activeId === 2 ? saved.multiState.chapter2 : saved.multiState.chapter1;
+      const maxT = activeId === 2 ? 8 : 6;
+      const minT = activeId === 2 ? 7 : 2;
+      const restoredTracks = Math.max(minT, Math.min(maxT, activeRuntime.simState.unlockedTracks ?? minT));
       const restoredSim: StationSimState = {
-        ...baseSim,
-        ...saved.simState,
+        ...activeRuntime.simState,
+        chapterId: activeId,
         unlockedTracks: restoredTracks,
-        trackSignals,
-        track1Signal: trackSignals[1] ?? saved.simState.track1Signal ?? 'red',
-        track2Signal: trackSignals[2] ?? saved.simState.track2Signal ?? 'red',
-        lastEventMessage: `Saved shift loaded · Station Level ${saved.simState.stationLevel} (${restoredTracks} Tracks).`,
+        lastEventMessage: `Saved shift loaded · ${CHAPTER_CONFIGS[activeId].stationName} Level ${activeRuntime.simState.stationLevel} (${restoredTracks} Tracks).`,
         lastEventTimestamp: performance.now(),
       };
       simStateRef.current = restoredSim;
       trainStateRef.current = syncTrainSimulationUnlockedTracks(
-        saved.trainState,
+        activeRuntime.trainState,
         restoredTracks,
         restoredSim.gameMinutes,
       );
+      opsStateRef.current = activeRuntime.opsState;
+      rebuildWorldForChapter(activeId);
       world.resetNpcs();
       player.x = -2;
       player.z = -7.2;
@@ -1172,10 +1751,7 @@ export function GameCanvas({
       sound.setWeather(saved.weather);
       onRestoreEnvironmentRef.current?.(saved);
       onBubblesUpdateRef.current([]);
-      pushHudSnapshot(true);
-      pushDashboardSnapshot(true);
-      pushUpgradeSnapshot(true);
-      pushEmergencySnapshot(true);
+      pushAllSnapshots();
       return true;
     };
 
@@ -1185,8 +1761,11 @@ export function GameCanvas({
     };
 
     triggerResetRef.current = () => {
-      simStateRef.current = createInitialSimState();
-      trainStateRef.current = createInitialTrainSimulation(1);
+      multiStateRef.current = createInitialMultiStationState();
+      simStateRef.current = multiStateRef.current.chapter1.simState;
+      trainStateRef.current = multiStateRef.current.chapter1.trainState;
+      opsStateRef.current = multiStateRef.current.chapter1.opsState;
+      rebuildWorldForChapter(1);
       autoWeatherRef.current = createInitialAutoWeatherState('clear');
       weatherRef.current = 'clear';
       sound.setWeather('clear');
@@ -1206,10 +1785,7 @@ export function GameCanvas({
       fpPitch = -0.02;
       keys.clear();
       onBubblesUpdateRef.current([]);
-      pushHudSnapshot(true);
-      pushDashboardSnapshot(true);
-      pushUpgradeSnapshot(true);
-      pushEmergencySnapshot(true);
+      pushAllSnapshots();
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1368,16 +1944,14 @@ export function GameCanvas({
     });
     resizeObserver.observe(container);
 
-    pushHudSnapshot(true);
-    pushDashboardSnapshot(true);
-    pushUpgradeSnapshot(true);
-    pushEmergencySnapshot(true);
+    pushAllSnapshots();
 
     let frameId = 0;
     let disposed = false;
     let lastTime = performance.now();
     let elapsed = 0;
     let autoSaveTimer = 0;
+    let bgAccumulator = 0;
     let lastPhase: GamePhase = phaseRef.current;
     let lastCamMode: CameraMode = cameraModeRef.current;
 
@@ -1476,6 +2050,39 @@ export function GameCanvas({
       );
       simStateRef.current = trainStep.simState;
       trainStateRef.current = trainStep.trainState;
+
+      const opsStep = stepStationOperations(
+        simStateRef.current,
+        opsStateRef.current,
+        dt,
+        performance.now(),
+      );
+      simStateRef.current = opsStep.simState;
+      opsStateRef.current = opsStep.opsState;
+      if (opsStep.spawnedEvent) {
+        sound.playRadioChirp();
+      }
+
+      // Advance inactive station smoothly in background once unlocked
+      bgAccumulator += dt;
+      if (bgAccumulator >= 0.25) {
+        const bgDt = bgAccumulator;
+        bgAccumulator = 0;
+        if (multiStateRef.current.activeChapterId === 2) {
+          multiStateRef.current.chapter1 = stepBackgroundStation(
+            multiStateRef.current.chapter1,
+            bgDt,
+            performance.now(),
+          );
+        } else if (multiStateRef.current.chapter2Unlocked) {
+          multiStateRef.current.chapter2 = stepBackgroundStation(
+            multiStateRef.current.chapter2,
+            bgDt,
+            performance.now(),
+          );
+        }
+      }
+
       if (trainStep.events.playHorn) {
         sound.playTrainHorn();
       }
@@ -1484,7 +2091,7 @@ export function GameCanvas({
         sound.playDoorChime(!anyClosing);
       }
       if (trainStep.events.newAnnouncements.length > 0) {
-        sound.playBengaliAnnouncement(trainStep.events.newAnnouncements[0]);
+        playGuardedAnnouncement(trainStep.events.newAnnouncements[0]);
       }
 
       // Occasional lightning flash during monsoon rain
@@ -1556,6 +2163,7 @@ export function GameCanvas({
             player.y,
             PLAYER_RADIUS,
             world.colliders,
+            simStateRef.current.chapterId === 2 ? CHAPTER2_MAX_Z : undefined,
           );
           const movedDist = Math.hypot(resolved.x - player.x, resolved.z - player.z);
           player.x = resolved.x;
@@ -1666,8 +2274,30 @@ export function GameCanvas({
         dt,
         elapsed,
         true,
+        opsStateRef.current.activeOpsEvents,
+        opsStateRef.current.powerOutageActive,
+        opsStateRef.current.vipProtocol,
       );
       simStateRef.current = worldRes.simState;
+      if (opsStateRef.current.vipProtocol?.active) {
+        const vipSync = syncVipPlatformOccupancy(
+          simStateRef.current,
+          opsStateRef.current,
+          worldRes.vipPlatformCounts,
+          performance.now(),
+        );
+        simStateRef.current = vipSync.simState;
+        opsStateRef.current = vipSync.opsState;
+        if (vipSync.completed) {
+          sound.playAchievementUnlock();
+          playGuardedAnnouncement(vipSync.announcement);
+          persistCurrentShift();
+          pushHudSnapshot(true);
+        } else if (vipSync.newlyClearedPlatforms.length > 0) {
+          sound.playRadioChirp();
+          pushHudSnapshot(true);
+        }
+      }
       if (!modalOpenRef.current) {
         player.x = worldRes.playerX;
         player.z = worldRes.playerZ;
@@ -1701,7 +2331,7 @@ export function GameCanvas({
         sound.playAchievementUnlock();
       }
       if (worldRes.npcEvents.announcementBn) {
-        sound.playBengaliAnnouncement(worldRes.npcEvents.announcementBn);
+        playGuardedAnnouncement(worldRes.npcEvents.announcementBn);
       }
 
       if (currentCamMode === 'first-person') {
@@ -1767,6 +2397,7 @@ export function GameCanvas({
       pushDashboardSnapshot(false);
       pushUpgradeSnapshot(false);
       pushEmergencySnapshot(false);
+      pushOperationsSnapshot(false);
     }
 
     function tick() {

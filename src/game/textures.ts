@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { TrackId } from './types';
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const canvas = document.createElement('canvas');
@@ -346,7 +347,7 @@ export function createCoachNumberPlateTexture(
 const BN_DIGITS = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'] as const;
 
 export function createPlatformSignTexture(
-  platformNum: 1 | 2 | 3 | 4 | 5 | 6,
+  platformNum: TrackId,
   maxAnisotropy = 4,
 ): THREE.CanvasTexture {
   const bnDigit = BN_DIGITS[platformNum] ?? String(platformNum);

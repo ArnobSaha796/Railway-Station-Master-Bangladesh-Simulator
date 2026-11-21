@@ -55,18 +55,27 @@ import {
   createPlatformTileTexturePair,
   createSignboardTexture,
 } from './textures';
-import { FOOTBRIDGE_HEIGHT, PLATFORM_HEIGHT } from './physics';
-import { getTrackSignal, STATION_NAME_BN, STATION_NAME_EN } from './rules';
+import { FOOTBRIDGE_HEIGHT, groundHeightAt, PLATFORM_HEIGHT } from './physics';
+import {
+  CHAPTER2_STATION_NAME_BN,
+  CHAPTER2_STATION_NAME_EN,
+  getTrackSignal,
+  STATION_NAME_BN,
+  STATION_NAME_EN,
+} from './rules';
 import { TRACK_Z } from './trainManager';
 import type {
+  ChapterId,
   ColliderBox,
   InteractablePoint,
   NpcFloatingBubble,
+  OpsEmergencyEvent,
   SignalAspect,
   StationSimState,
   SwitchPosition,
   TrackId,
   TrainSimulationState,
+  VipSecurityProtocol,
   WeatherMode,
 } from './types';
 
@@ -87,11 +96,15 @@ export interface StationWorldHandle {
     dt: number,
     elapsed: number,
     stepNpcAi?: boolean,
+    opsEvents?: OpsEmergencyEvent[],
+    powerOutageActive?: boolean,
+    vipProtocol?: VipSecurityProtocol | null,
   ) => {
     simState: StationSimState;
     playerX: number;
     playerZ: number;
     npcEvents: NpcStepEvents;
+    vipPlatformCounts: Partial<Record<TrackId, number>>;
   };
   getProjectedNpcBubbles: (camera: THREE.Camera) => NpcFloatingBubble[];
   triggerLightningFlash: () => void;
@@ -147,7 +160,10 @@ interface TrafficAgent {
 export function buildStationWorld(
   maxAnisotropy: number,
   isSoftwareGl: boolean,
+  chapterId: ChapterId = 1,
 ): StationWorldHandle {
+  const isCh2 = chapterId === 2;
+  const southShift = isCh2 ? 22 : 0;
   const scene = new THREE.Scene();
   const skyColor = new THREE.Color(0x9fd4f0);
   scene.background = skyColor;
@@ -286,7 +302,7 @@ export function buildStationWorld(
 
   const southParkStrip = new THREE.Mesh(new THREE.PlaneGeometry(92, 5.2), medianTurfMat);
   southParkStrip.rotation.x = -Math.PI / 2;
-  southParkStrip.position.set(0, 0.02, 47.0);
+  southParkStrip.position.set(0, 0.02, 47.0 + southShift);
   southParkStrip.receiveShadow = true;
   scene.add(southParkStrip);
 
@@ -298,14 +314,14 @@ export function buildStationWorld(
   forecourt.receiveShadow = true;
   scene.add(forecourt);
 
-  // North Station Boulevard (z = -31) & South Grand Avenue (z = +53.5)
+  // North Station Boulevard (z = -31) & South Grand Avenue (shifted south in Chapter 2)
   const avenueTex = createAsphaltAvenueTexture(maxAnisotropy);
   const avenueMat = new THREE.MeshStandardMaterial({ map: avenueTex, color: 0xffffff, roughness: 0.86 });
   const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xb0b8c2, roughness: 0.78 });
 
   [
     { z: -31.0, sidewalkN: -36.8, sidewalkS: -25.2 },
-    { z: 53.5, sidewalkN: 47.7, sidewalkS: 59.3 },
+    { z: 53.5 + southShift, sidewalkN: 47.7 + southShift, sidewalkS: 59.3 + southShift },
   ].forEach(({ z, sidewalkN, sidewalkS }) => {
     const road = new THREE.Mesh(new THREE.PlaneGeometry(195, 10.6), avenueMat);
     road.rotation.x = -Math.PI / 2;
@@ -374,10 +390,21 @@ export function buildStationWorld(
     color: 0xffffff,
     roughness: 0.76,
   });
-  const platSideMat = new THREE.MeshStandardMaterial({ color: 0x9b4634, roughness: 0.84 });
+  const platSideMat = new THREE.MeshStandardMaterial({
+    color: isCh2 ? 0x475569 : 0x9b4634,
+    roughness: isCh2 ? 0.65 : 0.84,
+  });
   const curbYellowMat = new THREE.MeshStandardMaterial({ color: 0xe8b225, roughness: 0.54 });
-  const ironGreenMat = new THREE.MeshStandardMaterial({ color: 0x1a563b, roughness: 0.38, metalness: 0.45 });
-  const canopyMat = new THREE.MeshStandardMaterial({ color: 0x226849, roughness: 0.44, metalness: 0.32 });
+  const ironGreenMat = new THREE.MeshStandardMaterial({
+    color: isCh2 ? 0x16425b : 0x1a563b,
+    roughness: 0.36,
+    metalness: 0.5,
+  });
+  const canopyMat = new THREE.MeshStandardMaterial({
+    color: isCh2 ? 0x1e607a : 0x226849,
+    roughness: 0.4,
+    metalness: 0.36,
+  });
 
   const buildPlatformStructure = (
     target: THREE.Group,
@@ -477,12 +504,12 @@ export function buildStationWorld(
     });
   });
 
-  // Heritage Station Nameboards (Bangla + English)
+  // Heritage / Terminal Station Nameboards (Bangla + English)
   const boardTex = createSignboardTexture(
-    STATION_NAME_BN,
-    STATION_NAME_EN.toUpperCase(),
-    '#f5b81c',
-    '#181612',
+    isCh2 ? CHAPTER2_STATION_NAME_BN : STATION_NAME_BN,
+    (isCh2 ? CHAPTER2_STATION_NAME_EN : STATION_NAME_EN).toUpperCase(),
+    isCh2 ? '#38bdf8' : '#f5b81c',
+    isCh2 ? '#0f172a' : '#181612',
     maxAnisotropy,
   );
   const boardMat = new THREE.MeshStandardMaterial({ map: boardTex, color: 0xffffff, roughness: 0.42 });
@@ -570,7 +597,10 @@ export function buildStationWorld(
   const fbSouthCapBase = createBridgeEndCap(11.1);
   const fbSouthCapM4 = createBridgeEndCap(25.55);
   fbSouthCapM4.visible = false;
-  createBridgeEndCap(41.55);
+  const fbSouthCapM6 = createBridgeEndCap(41.55);
+  fbSouthCapM6.visible = false;
+  const fbSouthCapM8 = createBridgeEndCap(61.55);
+  fbSouthCapM8.visible = false;
 
   // Physical safety borders along Footover Bridge deck (minY=3.1) & staircases (minY=0.9), thickened outward so players never tunnel off
   baseColliders.push(
@@ -660,7 +690,86 @@ export function buildStationWorld(
     radius: 3.1,
   });
 
-  // 5. Dynamic 3D Train Registry, Crossover Switches, Track Occupancy Beacons & Signals (Tracks 1-6)
+  // Operations Command Terminal Desk inside main concourse
+  const opsKioskGroup = new THREE.Group();
+  opsKioskGroup.position.set(6.8, PLATFORM_HEIGHT, -11.6);
+  const opsStand = new THREE.Mesh(
+    new THREE.BoxGeometry(1.3, 1.05, 0.72),
+    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.45, metalness: 0.4 }),
+  );
+  opsStand.position.y = 0.525;
+  opsStand.castShadow = true;
+  const opsScreen = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 0.62, 0.08),
+    new THREE.MeshStandardMaterial({
+      color: 0x0ea5e9,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.75,
+      roughness: 0.25,
+    }),
+  );
+  opsScreen.position.set(0, 1.32, 0);
+  opsKioskGroup.add(opsStand, opsScreen);
+  scene.add(opsKioskGroup);
+  baseColliders.push({ id: 'ops_desk_box', minX: 6.0, maxX: 7.6, minZ: -12.1, maxZ: -11.1 });
+  baseInteractables.push({
+    id: 'operations_desk',
+    title: 'Station Operations & Staff Console',
+    actionLabel: 'Open Operations, Tasks & Facilities [E / O]',
+    x: 6.8,
+    y: PLATFORM_HEIGHT,
+    z: -11.6,
+    radius: 3.1,
+  });
+
+  // Chapter 2 Architectural Distinction: Grand Arched Terminal Roof Trusses & Twin Glass Towers
+  if (isCh2) {
+    const trussSteelMat = new THREE.MeshStandardMaterial({
+      color: 0x1e3a5f,
+      roughness: 0.32,
+      metalness: 0.65,
+    });
+    const glassRoofMat = new THREE.MeshStandardMaterial({
+      color: 0x7dd3fc,
+      transparent: true,
+      opacity: 0.34,
+      roughness: 0.14,
+      metalness: 0.25,
+    });
+    [-16, -4, 8, 20].forEach((tx) => {
+      const archGeo = new THREE.TorusGeometry(27.5, 0.24, 8, 28, Math.PI);
+      const arch = new THREE.Mesh(archGeo, trussSteelMat);
+      arch.rotation.y = Math.PI / 2;
+      arch.position.set(tx, PLATFORM_HEIGHT + 2.5, 21.5);
+      arch.scale.set(1, 0.36, 1);
+      scene.add(arch);
+    });
+    const canopySpan = new THREE.Mesh(new THREE.BoxGeometry(38, 0.14, 52), glassRoofMat);
+    canopySpan.position.set(2, PLATFORM_HEIGHT + 12.2, 21.5);
+    scene.add(canopySpan);
+
+    [-28, 30].forEach((tx, idx) => {
+      const tower = createModernSkyscraper(
+        6.5,
+        24,
+        6.5,
+        0x0f172a,
+        idx % 2 === 0 ? glassFacadeMatA : glassFacadeMatB,
+        0x38bdf8,
+      );
+      tower.position.set(tx, 0, -16.5);
+      scene.add(tower);
+      baseColliders.push({
+        id: `ch2_twin_tower_${idx}`,
+        minX: tx - 3.3,
+        maxX: tx + 3.3,
+        minZ: -19.8,
+        maxZ: -13.2,
+      });
+    });
+  }
+
+  // 5. Dynamic 3D Train Registry, Crossover Switches, Track Occupancy Beacons & Signals (Tracks 1-8)
   const trainMeshes = new Map<
     string,
     { controller: TrainModelController; group: THREE.Group; halfLen: number }
@@ -683,6 +792,8 @@ export function buildStationWorld(
     4: createTrackOccupancyBeacon(),
     5: createTrackOccupancyBeacon(),
     6: createTrackOccupancyBeacon(),
+    7: createTrackOccupancyBeacon(),
+    8: createTrackOccupancyBeacon(),
   };
   trackBeacons[1].group.position.set(-25.5, PLATFORM_HEIGHT, -5.0);
   trackBeacons[2].group.position.set(-25.5, PLATFORM_HEIGHT, 5.0);
@@ -695,6 +806,8 @@ export function buildStationWorld(
     4: createSemaphoreSignal(),
     5: createSemaphoreSignal(),
     6: createSemaphoreSignal(),
+    7: createSemaphoreSignal(),
+    8: createSemaphoreSignal(),
   };
   const westSignals: Record<TrackId, SemaphoreSignalController> = {
     1: createSemaphoreSignal(),
@@ -703,6 +816,8 @@ export function buildStationWorld(
     4: createSemaphoreSignal(),
     5: createSemaphoreSignal(),
     6: createSemaphoreSignal(),
+    7: createSemaphoreSignal(),
+    8: createSemaphoreSignal(),
   };
 
   eastSignals[1].group.position.set(24.5, PLATFORM_HEIGHT, -5.5);
@@ -807,9 +922,9 @@ export function buildStationWorld(
     [-28, 0, -25.4, Math.PI / 2],
     [0, 0, -25.4, Math.PI / 2],
     [28, 0, -25.4, Math.PI / 2],
-    [-28, 0, 47.6, -Math.PI / 2],
-    [0, 0, 47.6, -Math.PI / 2],
-    [28, 0, 47.6, -Math.PI / 2],
+    [-28, 0, 47.6 + southShift, -Math.PI / 2],
+    [0, 0, 47.6 + southShift, -Math.PI / 2],
+    [28, 0, 47.6 + southShift, -Math.PI / 2],
   ];
   lightCoords.forEach(([lx, ly, lz, rot]) => {
     const lamp = createStreetlight(streetBulbMat);
@@ -818,30 +933,38 @@ export function buildStationWorld(
     scene.add(lamp);
   });
 
-  // 7. Progressive Station Expansion Modules (Tracks 3, 4, 5, 6) + Tower Cranes
-  const moduleGroups: Record<3 | 4 | 5 | 6, THREE.Group> = {
+  // 7. Progressive Station Expansion Modules (Tracks 3..8) + Tower Cranes
+  const moduleGroups: Record<3 | 4 | 5 | 6 | 7 | 8, THREE.Group> = {
     3: new THREE.Group(),
     4: new THREE.Group(),
     5: new THREE.Group(),
     6: new THREE.Group(),
+    7: new THREE.Group(),
+    8: new THREE.Group(),
   };
-  const moduleColliders: Record<3 | 4 | 5 | 6, ColliderBox[]> = {
+  const moduleColliders: Record<3 | 4 | 5 | 6 | 7 | 8, ColliderBox[]> = {
     3: [],
     4: [],
     5: [],
     6: [],
+    7: [],
+    8: [],
   };
-  const moduleInteractables: Record<3 | 4 | 5 | 6, InteractablePoint[]> = {
+  const moduleInteractables: Record<3 | 4 | 5 | 6 | 7 | 8, InteractablePoint[]> = {
     3: [],
     4: [],
     5: [],
     6: [],
+    7: [],
+    8: [],
   };
-  const moduleAnimTimers: Record<3 | 4 | 5 | 6, number> = {
+  const moduleAnimTimers: Record<3 | 4 | 5 | 6 | 7 | 8, number> = {
     3: 0,
     4: 0,
     5: 0,
     6: 0,
+    7: 0,
+    8: 0,
   };
 
   // --- Module 3 (Level 2 -> Track 3 @ z=13.3) ---
@@ -1078,7 +1201,6 @@ export function buildStationWorld(
       { id: 'fb_rail_w_m6', minX: -26.8, maxX: -25.12, minZ: 25.55, maxZ: 39.4, minY: 3.1 },
       { id: 'fb_stair4_n', minX: -28.0, maxX: -25.1, minZ: 38.2, maxZ: 39.62, minY: 0.9 },
       { id: 'fb_stair4_s', minX: -28.0, maxX: -25.1, minZ: 41.38, maxZ: 42.8, minY: 0.9 },
-      { id: 'fb_rail_s_end_m6', minX: -25.35, maxX: -22.65, minZ: 41.45, maxZ: 43.1, minY: 3.1 },
     );
 
     const cross6 = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.1, 5.2), plankCrossingMat);
@@ -1106,7 +1228,130 @@ export function buildStationWorld(
     });
   }
 
-  ([3, 4, 5, 6] as const).forEach((trackNum) => {
+  // --- Module 7 (Chapter 2 Track 7 @ z=48.8 & Padma Platform 5 @ z=56.5..64.5) ---
+  {
+    const g = moduleGroups[7];
+    buildTrackAssembly(TRACK_Z[7], g);
+    buildPlatformStructure(g, 60.5, 8.0, 60, [56.68], 'south', 0);
+
+    const p4SouthCurb = new THREE.Mesh(new THREE.BoxGeometry(60, 0.04, 0.32), curbYellowMat);
+    p4SouthCurb.position.set(0, PLATFORM_HEIGHT + 0.01, 45.82);
+    g.add(p4SouthCurb);
+
+    const canopy5 = new THREE.Mesh(new THREE.BoxGeometry(34, 0.18, 4.4), canopyMat);
+    canopy5.position.set(-1, PLATFORM_HEIGHT + 5.2, 60.5);
+    canopy5.castShadow = true;
+    g.add(canopy5);
+    [-14, -4, 6, 14].forEach((px) => {
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 5.2, 12), ironGreenMat);
+      col.position.set(px, PLATFORM_HEIGHT + 2.6, 60.5);
+      col.castShadow = true;
+      g.add(col);
+      moduleColliders[7].push({
+        id: `canopy5_col_${px}`,
+        minX: px - 0.18,
+        maxX: px + 0.18,
+        minZ: 60.32,
+        maxZ: 60.68,
+      });
+    });
+
+    addHangingPlatformSign(g, -6, PLATFORM_HEIGHT + 4.1, 58.6, 7);
+    addHangingPlatformSign(g, 6, PLATFORM_HEIGHT + 4.1, 58.6, 7);
+
+    const p5Kiosk = createFoodStall('পদ্মা এক্সপ্রেস লাউঞ্জ', 'PADMA EXECUTIVE LOUNGE', 0x0369a1, maxAnisotropy);
+    p5Kiosk.position.set(-10.5, PLATFORM_HEIGHT, 61.5);
+    p5Kiosk.rotation.y = Math.PI;
+    g.add(p5Kiosk);
+    moduleColliders[7].push({
+      id: 'p5_kiosk_box',
+      minX: -12.3,
+      maxX: -8.7,
+      minZ: 60.5,
+      maxZ: 62.5,
+    });
+
+    [-18, 4, 16].forEach((bx, idx) => {
+      const bench = createStationBench();
+      bench.position.set(bx, PLATFORM_HEIGHT, 60.8);
+      bench.rotation.y = Math.PI;
+      g.add(bench);
+      moduleColliders[7].push({
+        id: `p5_bench_${idx}`,
+        minX: bx - 1.1,
+        maxX: bx + 1.1,
+        minZ: 60.45,
+        maxZ: 61.15,
+      });
+    });
+
+    const fbExt3 = createExtendedFootbridgeSection(41.6, 61.6, [
+      { centerZ: 60.5, startX: -4.0, endX: 0.2, steps: 12 },
+    ]);
+    fbExt3.position.set(-24.0, 0, 0);
+    g.add(fbExt3);
+    moduleColliders[7].push(
+      { id: 'fb_rail_e_m7', minX: -22.88, maxX: -21.0, minZ: 41.6, maxZ: 61.65, minY: 3.1 },
+      { id: 'fb_rail_w_m7', minX: -26.8, maxX: -25.12, minZ: 41.55, maxZ: 59.4, minY: 3.1 },
+      { id: 'fb_stair5_n', minX: -28.0, maxX: -25.1, minZ: 58.2, maxZ: 59.62, minY: 0.9 },
+      { id: 'fb_stair5_s', minX: -28.0, maxX: -25.1, minZ: 61.38, maxZ: 62.8, minY: 0.9 },
+      { id: 'fb_rail_s_end_m7', minX: -25.35, maxX: -22.65, minZ: 61.45, maxZ: 63.1, minY: 3.1 },
+    );
+
+    const cross7 = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.1, 10.6), plankCrossingMat);
+    cross7.position.set(18.5, 0.11, 51.25);
+    const slope7N = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.1, 1.35), platDeckMat);
+    slope7N.position.set(18.5, 0.39, 46.55);
+    slope7N.rotation.x = -0.42;
+    const slope7S = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.1, 1.35), platDeckMat);
+    slope7S.position.set(18.5, 0.39, 55.95);
+    slope7S.rotation.x = 0.42;
+    g.add(cross7, slope7N, slope7S);
+
+    trackBeacons[7].group.position.set(-25.5, PLATFORM_HEIGHT, 45.4);
+    eastSignals[7].group.position.set(24.5, PLATFORM_HEIGHT, 45.4);
+    westSignals[7].group.position.set(-28.0, 0, 45.4);
+    westSignals[7].group.rotation.y = Math.PI;
+    g.add(trackBeacons[7].group, eastSignals[7].group, westSignals[7].group);
+
+    moduleColliders[7].push({ id: 'sig7', minX: 24.0, maxX: 25.0, minZ: 44.9, maxZ: 45.9 });
+    moduleInteractables[7].push({
+      id: 'signal_track7',
+      title: 'Track 7 Semaphore Signal',
+      actionLabel: 'Cycle Signal (RED / YELLOW / GREEN)',
+      x: 24.5,
+      y: PLATFORM_HEIGHT,
+      z: 45.4,
+      radius: 3.0,
+    });
+  }
+
+  // --- Module 8 (Chapter 2 Final Tier -> Track 8 @ z=54.8) ---
+  {
+    const g = moduleGroups[8];
+    buildTrackAssembly(TRACK_Z[8], g);
+    addHangingPlatformSign(g, -6, PLATFORM_HEIGHT + 4.1, 57.3, 8);
+    addHangingPlatformSign(g, 6, PLATFORM_HEIGHT + 4.1, 57.3, 8);
+
+    trackBeacons[8].group.position.set(-25.5, PLATFORM_HEIGHT, 57.2);
+    eastSignals[8].group.position.set(24.5, PLATFORM_HEIGHT, 57.2);
+    eastSignals[8].group.rotation.y = Math.PI;
+    westSignals[8].group.position.set(-28.0, 0, 57.2);
+    g.add(trackBeacons[8].group, eastSignals[8].group, westSignals[8].group);
+
+    moduleColliders[8].push({ id: 'sig8', minX: 24.0, maxX: 25.0, minZ: 56.7, maxZ: 57.7 });
+    moduleInteractables[8].push({
+      id: 'signal_track8',
+      title: 'Track 8 Semaphore Signal',
+      actionLabel: 'Cycle Signal (RED / YELLOW / GREEN)',
+      x: 24.5,
+      y: PLATFORM_HEIGHT,
+      z: 57.2,
+      radius: 3.0,
+    });
+  }
+
+  ([3, 4, 5, 6, 7, 8] as const).forEach((trackNum) => {
     moduleGroups[trackNum].visible = false;
     scene.add(moduleGroups[trackNum]);
   });
@@ -1141,8 +1386,8 @@ export function buildStationWorld(
     ['ঢাকা মেট্রো প্লাজা', 'DHAKA METRO PLAZA', 0x10b981, -26, -40.5, 0],
     ['বাংলামোটর গ্র্যান্ড মল', 'BANGLAMOTOR GRAND MALL', 0x0ea5e9, 0, -40.5, 0],
     ['শাপলা বিজনেস সেন্টার', 'SHAPLA BUSINESS CENTER', 0xf59e0b, 26, -40.5, 0],
-    ['পদ্মা স্কয়ার', 'PADMA SQUARE', 0x6366f1, -22, 64.0, Math.PI],
-    ['মেট্রোপলিটন আর্কেড', 'METRO ARCADE', 0x14b8a6, 22, 64.0, Math.PI],
+    ['পদ্মা স্কয়ার', 'PADMA SQUARE', 0x6366f1, -22, 64.0 + southShift, Math.PI],
+    ['মেট্রোপলিটন আর্কেড', 'METRO ARCADE', 0x14b8a6, 22, 64.0 + southShift, Math.PI],
   ];
   plazas.forEach(([bn, en, accent, px, pz, rot], idx) => {
     const plaza = createCommercialPlaza(bn, en, accent, maxAnisotropy, idx % 2 === 0 ? glassFacadeMatA : glassFacadeMatB);
@@ -1164,13 +1409,13 @@ export function buildStationWorld(
     [-14, -55, 13, 44, 12, 0x1e293b, 0x10b981, false],
     [14, -54, 12, 39, 11, 0x3f3f46, 0xf59e0b, true],
     [40, -52, 11, 31, 11, 0x334155, 0x38bdf8, false],
-    [-38, 74, 12, 36, 11, 0x1e293b, 0x14b8a6, false],
-    [0, 76, 14, 48, 12, 0x334155, 0x38bdf8, true],
-    [38, 74, 12, 33, 11, 0x27272a, 0xfacc15, false],
+    [-38, 74 + southShift, 12, 36, 11, 0x1e293b, 0x14b8a6, false],
+    [0, 76 + southShift, 14, 48, 12, 0x334155, 0x38bdf8, true],
+    [38, 74 + southShift, 12, 33, 11, 0x27272a, 0xfacc15, false],
     [-72, -38, 11, 30, 11, 0x334155, 0x38bdf8, true],
-    [-72, 58, 11, 32, 11, 0x1e293b, 0x10b981, false],
+    [-72, 58 + southShift, 11, 32, 11, 0x1e293b, 0x10b981, false],
     [72, -38, 11, 29, 11, 0x334155, 0x38bdf8, false],
-    [72, 58, 11, 35, 11, 0x1e293b, 0x14b8a6, true],
+    [72, 58 + southShift, 11, 35, 11, 0x1e293b, 0x14b8a6, true],
   ];
   heroTowers.forEach(([tx, tz, w, h, d, pod, neon, useA]) => {
     const tower = createModernSkyscraper(w, h, d, pod, useA ? glassFacadeMatA : glassFacadeMatB, neon);
@@ -1178,14 +1423,14 @@ export function buildStationWorld(
     scene.add(tower);
   });
 
-  // Instanced Distant Metropolitan Skyline Ring (skipping active train corridor z in [-12, +46])
+  // Instanced Distant Metropolitan Skyline Ring (skipping active train corridor)
   const skylinePositions: [number, number, number, number, number][] = [];
   for (let i = 0; i < 64; i++) {
     const angle = (i / 64) * Math.PI * 2;
-    const dist = 88 + (i % 4) * 14;
+    const dist = (isCh2 ? 104 : 88) + (i % 4) * 14;
     const sx = Math.cos(angle) * dist * 1.1;
     const sz = Math.sin(angle) * dist * 0.95;
-    if (sz > -14 && sz < 48) continue;
+    if (sz > -14 && sz < (isCh2 ? 72 : 48)) continue;
     const w = 9 + (i % 4) * 2.5;
     const h = 24 + ((i * 17) % 38);
     skylinePositions.push([sx, sz, w, h, w]);
@@ -1208,19 +1453,27 @@ export function buildStationWorld(
   scene.add(skylineInst);
 
   // Elevated Highway Flyovers (West x=-56, East x=+56, y=8.9m -> piers placed safely outside tracks!)
-  const westFlyover = createElevatedFlyover(144, 8.6, [-54, -36, -18, 46, 62], 8.9);
-  westFlyover.position.set(-56, 0, 12);
+  const westFlyover = createElevatedFlyover(144, 8.6, [-54, -36, -18, 46 + southShift, 62 + southShift], 8.9);
+  westFlyover.position.set(-56, 0, 12 + southShift * 0.4);
   scene.add(westFlyover);
 
-  const eastFlyover = createElevatedFlyover(144, 8.6, [-54, -36, -18, 46, 62], 8.9);
-  eastFlyover.position.set(56, 0, 12);
+  const eastFlyover = createElevatedFlyover(144, 8.6, [-54, -36, -18, 46 + southShift, 62 + southShift], 8.9);
+  eastFlyover.position.set(56, 0, 12 + southShift * 0.4);
   scene.add(eastFlyover);
 
   // Illuminated Bilingual City Billboards
   const bbSpecs: [string, string, string, string, number, number, number][] = [
     ['বাংলাদেশ রেলওয়ে · দ্রুতগতির সেবা', 'BANGLADESH RAILWAY · METRO HUB', '#062c22', '#10b981', -18, -24.5, 0],
-    ['আধুনিক শাপলাপুর সিটি', 'MODERN INTERNATIONAL STATION', '#0c233a', '#38bdf8', 24, -24.5, 0],
-    ['ইন্টারসিটি ও মেট্রো সংযোগ', 'EXPRESS TRANSIT CORRIDOR', '#1e1b4b', '#facc15', -18, 47.6, Math.PI],
+    [
+      isCh2 ? 'পদ্মা সেন্ট্রাল মেগা টার্মিনাল' : 'আধুনিক শাপলাপুর সিটি',
+      isCh2 ? 'PADMA CENTRAL HIGH-SPEED HUB' : 'MODERN INTERNATIONAL STATION',
+      '#0c233a',
+      '#38bdf8',
+      24,
+      -24.5,
+      0,
+    ],
+    ['ইন্টারসিটি ও মেট্রো সংযোগ', 'EXPRESS TRANSIT CORRIDOR', '#1e1b4b', '#facc15', -18, 47.6 + southShift, Math.PI],
   ];
   bbSpecs.forEach(([bn, en, bg, acc, bx, bz, rot], idx) => {
     const bb = createDigitalBillboard(bn, en, bg, acc, maxAnisotropy);
@@ -1243,8 +1496,8 @@ export function buildStationWorld(
     [-28, -22.2, 8.2],
     [28, -22.2, 7.8],
     [38, -22.2, 8.4],
-    [-36, 47.2, 7.8],
-    [36, 47.2, 8.0],
+    [-36, 47.2 + southShift, 7.8],
+    [36, 47.2 + southShift, 8.0],
   ];
   urbanPalms.forEach(([tx, tz, h], idx) => {
     const palm = createCoconutPalm(h);
@@ -1278,7 +1531,11 @@ export function buildStationWorld(
     const isNorth = i < 6;
     const laneIdx = i % 2;
     const dir: 1 | -1 = laneIdx === 0 ? 1 : -1;
-    const zCoord = isNorth ? (dir === 1 ? -28.6 : -33.4) : dir === 1 ? 55.8 : 51.2;
+    const zCoord = isNorth
+      ? dir === 1
+        ? -28.6
+        : -33.4
+      : (dir === 1 ? 55.8 : 51.2) + southShift;
     const kind = vehicleKinds[i % vehicleKinds.length];
     const colorHex = vehicleColors[i % vehicleColors.length];
     const veh = createUrbanVehicle(kind, colorHex, vehicleHeadlightMat, vehicleTaillightMat);
@@ -1342,10 +1599,11 @@ export function buildStationWorld(
     scene.add(ring);
   });
 
-  // 10. Living Station NPC Ecosystem + Emergency 3D Props
+  // 10. Living Station NPC Ecosystem + Emergency & Ops 3D Props
   let npcState = createInitialNpcSimulation();
   const npcRigs = new Map<string, ArticulatedNpcRig>();
   const hazardProps = new Map<string, EmergencyHazardProp>();
+  const opsHazardProps = new Map<string, EmergencyHazardProp>();
 
   const syncNpcMeshes = (elapsed: number, dt: number) => {
     const liveIds = new Set<string>();
@@ -1443,6 +1701,8 @@ export function buildStationWorld(
     4: 'red',
     5: 'red',
     6: 'red',
+    7: 'red',
+    8: 'red',
   };
   const prevOcc: Record<TrackId, boolean> = {
     1: false,
@@ -1451,6 +1711,8 @@ export function buildStationWorld(
     4: false,
     5: false,
     6: false,
+    7: false,
+    8: false,
   };
   let prevSwitchPos: SwitchPosition = 'straight';
   let prevUnlockedTracks = 2;
@@ -1494,7 +1756,7 @@ export function buildStationWorld(
 
   const getGroundSurface = (x: number, z: number, y = 0): 'concrete' | 'wood' | 'grass' => {
     if (y >= FOOTBRIDGE_HEIGHT - 0.5) return 'wood';
-    if (x >= 16 && x <= 21 && z >= -4.7 && z <= 37.5) return 'wood';
+    if (x >= 16 && x <= 21 && z >= -4.7 && z <= (isCh2 ? 56.5 : 37.5)) return 'wood';
     return 'concrete';
   };
 
@@ -1555,6 +1817,11 @@ export function buildStationWorld(
       disposeObjectGroup(prop.group);
     }
     hazardProps.clear();
+    for (const prop of opsHazardProps.values()) {
+      scene.remove(prop.group);
+      disposeObjectGroup(prop.group);
+    }
+    opsHazardProps.clear();
     npcState = createInitialNpcSimulation();
     syncNpcMeshes(0, 0.016);
   };
@@ -1569,20 +1836,23 @@ export function buildStationWorld(
     dt: number,
     elapsed: number,
     stepNpcAi = true,
+    opsEvents: OpsEmergencyEvent[] = [],
+    powerOutageActive = false,
+    vipProtocol: VipSecurityProtocol | null = null,
   ) => {
     const unlockedTracks = simState.unlockedTracks;
 
     // Trigger 3D construction animation when new tracks unlock
     if (unlockedTracks > prevUnlockedTracks) {
       for (let t = prevUnlockedTracks + 1; t <= unlockedTracks; t++) {
-        if (t === 3 || t === 4 || t === 5 || t === 6) {
+        if (t === 3 || t === 4 || t === 5 || t === 6 || t === 7 || t === 8) {
           moduleAnimTimers[t] = 3.5;
         }
       }
       craneTimer = 3.6;
       prevUnlockedTracks = unlockedTracks;
     } else if (unlockedTracks < prevUnlockedTracks) {
-      ([3, 4, 5, 6] as const).forEach((t) => {
+      ([3, 4, 5, 6, 7, 8] as const).forEach((t) => {
         moduleAnimTimers[t] = 0;
         moduleGroups[t].position.y = 0;
       });
@@ -1590,7 +1860,7 @@ export function buildStationWorld(
       prevUnlockedTracks = unlockedTracks;
     }
 
-    ([3, 4, 5, 6] as const).forEach((t) => {
+    ([3, 4, 5, 6, 7, 8] as const).forEach((t) => {
       const grp = moduleGroups[t];
       const active = unlockedTracks >= t;
       grp.visible = active;
@@ -1616,8 +1886,8 @@ export function buildStationWorld(
       cranes[1].group.visible = false;
     }
 
-    // Sync signals, switches, and occupancy beacons across Tracks 1..6
-    ([1, 2, 3, 4, 5, 6] as const).forEach((t) => {
+    // Sync signals, switches, and occupancy beacons across Tracks 1..8
+    ([1, 2, 3, 4, 5, 6, 7, 8] as const).forEach((t) => {
       const aspect = getTrackSignal(simState, t);
       if (aspect !== prevSignals[t]) {
         prevSignals[t] = aspect;
@@ -1645,7 +1915,7 @@ export function buildStationWorld(
     interactables.length = 0;
     interactables.push(...baseInteractables);
 
-    ([3, 4, 5, 6] as const).forEach((t) => {
+    ([3, 4, 5, 6, 7, 8] as const).forEach((t) => {
       if (unlockedTracks >= t) {
         colliders.push(...moduleColliders[t]);
         interactables.push(...moduleInteractables[t]);
@@ -1655,6 +1925,8 @@ export function buildStationWorld(
     // Keep Footover Bridge south end closed visually and physically at current unlocked terminus
     fbSouthCapBase.visible = unlockedTracks < 4;
     fbSouthCapM4.visible = unlockedTracks >= 4 && unlockedTracks < 6;
+    fbSouthCapM6.visible = unlockedTracks === 6;
+    fbSouthCapM8.visible = unlockedTracks >= 7;
     if (unlockedTracks < 4) {
       colliders.push({
         id: 'fb_rail_s_end_base',
@@ -1671,6 +1943,15 @@ export function buildStationWorld(
         maxX: -22.65,
         minZ: 25.45,
         maxZ: 27.1,
+        minY: 3.1,
+      });
+    } else if (unlockedTracks < 7) {
+      colliders.push({
+        id: 'fb_rail_s_end_m6',
+        minX: -25.35,
+        maxX: -22.65,
+        minZ: 41.45,
+        maxZ: 43.1,
         minY: 3.1,
       });
     }
@@ -1717,6 +1998,8 @@ export function buildStationWorld(
         4: 21.8,
         5: 27.2,
         6: 38.4,
+        7: 45.2,
+        8: 57.3,
       };
       const doorInteractZByPlatform: Record<TrackId, number> = {
         1: -5.3,
@@ -1725,6 +2008,8 @@ export function buildStationWorld(
         4: 21.6,
         5: 27.4,
         6: 38.1,
+        7: 45.4,
+        8: 57.1,
       };
 
       if (
@@ -1803,6 +2088,8 @@ export function buildStationWorld(
       announcementBn: null,
     };
 
+    let vipPlatformCounts: Partial<Record<TrackId, number>> = {};
+
     if (stepNpcAi) {
       const npcRes = stepNpcSimulation(
         npcState,
@@ -1811,12 +2098,14 @@ export function buildStationWorld(
         { x: playerX, y: playerY, z: playerZ },
         colliders,
         dt,
+        vipProtocol,
       );
       npcState = npcRes.npcState;
       outSimState = npcRes.simState;
       outPlayerX = npcRes.playerX;
       outPlayerZ = npcRes.playerZ;
       npcEvents = npcRes.events;
+      vipPlatformCounts = npcRes.vipPlatformCounts;
     }
     syncNpcMeshes(elapsed, dt);
 
@@ -1857,6 +2146,44 @@ export function buildStationWorld(
         scene.remove(prop.group);
         disposeObjectGroup(prop.group);
         hazardProps.delete(pid);
+      }
+    }
+
+    // Sync 3D Operations Repair Points for active Ops Emergencies
+    const liveOpsIds = new Set<string>();
+    for (let oIdx = 0; oIdx < opsEvents.length; oIdx++) {
+      const ev = opsEvents[oIdx];
+      if (ev.resolved || ev.failed) continue;
+      liveOpsIds.add(ev.id);
+      const yPos = groundHeightAt(ev.x, ev.z, 0.65, unlockedTracks);
+      let prop = opsHazardProps.get(ev.id);
+      if (!prop) {
+        const propKind =
+          ev.kind === 'power_failure' || ev.kind === 'train_breakdown' ? 'fire' : 'package';
+        prop = createEmergencyHazardProp(propKind);
+        prop.group.position.set(ev.x, yPos, ev.z);
+        scene.add(prop.group);
+        opsHazardProps.set(ev.id, prop);
+      }
+      prop.group.position.set(ev.x, yPos, ev.z);
+      prop.update(elapsed);
+
+      interactables.push({
+        id: 'ops_repair_point',
+        title: ev.title,
+        actionLabel: `${ev.actionLabel} [E]`,
+        x: ev.x,
+        y: yPos,
+        z: ev.z,
+        radius: 3.2,
+        missionId: ev.id,
+      });
+    }
+    for (const [oid, prop] of opsHazardProps.entries()) {
+      if (!liveOpsIds.has(oid)) {
+        scene.remove(prop.group);
+        disposeObjectGroup(prop.group);
+        opsHazardProps.delete(oid);
       }
     }
 
@@ -1920,15 +2247,16 @@ export function buildStationWorld(
     const nightFactor = 1 - daylightFactor;
     const duskFactor = Math.sin(daylightFactor * Math.PI);
 
-    // Night illumination for glass skyscrapers, streetlamps, billboards, and traffic lights
+    // Night illumination for glass skyscrapers, streetlamps, billboards, and traffic lights (dims on Station Power Outage)
+    const outageScale = powerOutageActive ? 0.16 : 1.0;
     const nightGlow = nightFactor * 0.9 + duskFactor * 0.35;
-    glassFacadeMatA.emissiveIntensity = 0.05 + nightGlow * 1.15;
-    glassFacadeMatB.emissiveIntensity = 0.05 + nightGlow * 1.15;
-    streetBulbMat.emissiveIntensity = 0.2 + nightGlow * 2.1;
+    glassFacadeMatA.emissiveIntensity = (0.05 + nightGlow * 1.15) * outageScale;
+    glassFacadeMatB.emissiveIntensity = (0.05 + nightGlow * 1.15) * outageScale;
+    streetBulbMat.emissiveIntensity = (0.2 + nightGlow * 2.1) * outageScale;
     vehicleHeadlightMat.emissiveIntensity = 0.25 + nightGlow * 2.2;
     vehicleTaillightMat.emissiveIntensity = 0.35 + nightGlow * 1.9;
     for (let b = 0; b < billboardMats.length; b++) {
-      billboardMats[b].emissiveIntensity = 0.32 + nightGlow * 0.95;
+      billboardMats[b].emissiveIntensity = (0.32 + nightGlow * 0.95) * outageScale;
     }
     starMat.opacity = Math.max(0, (nightFactor - 0.2) * 1.15) * (1 - rainBlend);
     starField.visible = starMat.opacity > 0.02;
@@ -1939,7 +2267,7 @@ export function buildStationWorld(
     if (duskFactor > 0.25 && rainBlend < 0.5) {
       sunLight.color.lerp(duskSunColor, duskFactor * 0.55 * (1 - rainBlend));
     }
-    hemiLight.intensity = (0.48 + daylightFactor * 0.4) * rainDim;
+    hemiLight.intensity = (0.48 + daylightFactor * 0.4) * rainDim * (powerOutageActive ? 0.72 : 1.0);
 
     skyDome.mesh.visible = true;
     if (
@@ -1990,6 +2318,7 @@ export function buildStationWorld(
       playerX: outPlayerX,
       playerZ: outPlayerZ,
       npcEvents,
+      vipPlatformCounts,
     };
   };
 

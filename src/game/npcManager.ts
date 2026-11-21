@@ -62,6 +62,8 @@ import type {
   StationSimState,
   TrackId,
   TrainSimulationState,
+  VipFlowPattern,
+  VipSecurityProtocol,
 } from './types';
 
 export interface NpcAgent {
@@ -315,17 +317,81 @@ function platformNavNodeIdsForTrack(trackId: TrackId | null, unlockedTracks = 2)
   return ['p2_mw', 'p2_center', 'p2_me'];
 }
 
+export function normalizeVipPlatformTrack(trackId: TrackId): TrackId {
+  if (trackId === 3) return 2;
+  if (trackId === 5) return 4;
+  if (trackId === 8) return 7;
+  return trackId;
+}
+
+export function getPlatformTrackForPosition(z: number, y: number): TrackId | null {
+  if (y > 2.2) return null;
+  if (z >= -13.2 && z <= -4.4) return 1;
+  if (z >= 4.4 && z <= 12.2) return 2;
+  if (z >= 20.5 && z <= 28.5) return 4;
+  if (z >= 37.0 && z <= 46.5) return 6;
+  if (z >= 56.0 && z <= 65.0) return 7;
+  return null;
+}
+
+export function getVipEvacuationPoolForPattern(
+  flowPattern: VipFlowPattern,
+  lockedPlatforms: readonly TrackId[],
+  unlockedTracks: number,
+): string[] {
+  const lockedSet = new Set(lockedPlatforms.map(normalizeVipPlatformTrack));
+  const candidateSets: string[] = [];
+
+  if (flowPattern === 'red_carpet_concourse_sweep') {
+    if (!lockedSet.has(1)) candidateSets.push('p1_center', 'p1_me', 'tea_stall', 'p1_bench_c');
+    if (!lockedSet.has(2)) candidateSets.push('p2_center', 'p2_mw', 'jhalmuri_stall', 'p2_bench_c');
+    if (unlockedTracks >= 4 && !lockedSet.has(4)) candidateSets.push('p3_center', 'p3_me');
+    if (unlockedTracks >= 6 && !lockedSet.has(6)) candidateSets.push('p4_center');
+  } else if (flowPattern === 'split_platform_lockdown') {
+    candidateSets.push('forecourt_w', 'forecourt_c', 'forecourt_e', 'book_stall', 'road_north', 'station_entrance');
+    if (unlockedTracks >= 6) candidateSets.push('south_city_plaza', 'south_city_e');
+  } else {
+    // diplomatic_evac_corridor: clear northward off Platform 1 into Forecourt plaza & ramps
+    candidateSets.push('forecourt_w', 'forecourt_c', 'forecourt_e', 'book_stall', 'station_entrance');
+  }
+
+  const valid = candidateSets.filter((id) => {
+    const node = getNavNode(id);
+    if (!node || !isNavNodeUnlocked(node, unlockedTracks)) return false;
+    const nodePlat = node.platform ? normalizeVipPlatformTrack(node.platform) : null;
+    return !nodePlat || !lockedSet.has(nodePlat);
+  });
+
+  if (valid.length > 0) return valid;
+  return ['forecourt_w', 'forecourt_c', 'forecourt_e', 'station_entrance'];
+}
+
 function getTargetNodeForNpc(
   npc: NpcAgent,
   trainState: TrainSimulationState,
   seqSeed: number,
   unlockedTracks = 2,
+  vipProtocol: VipSecurityProtocol | null = null,
 ): NavNode {
+  const lockedSet =
+    vipProtocol?.active
+      ? new Set(vipProtocol.lockedPlatforms.map(normalizeVipPlatformTrack))
+      : null;
+
   const pick = (ids: string[]): NavNode => {
     const valid = ids
       .map((id) => getNavNode(id))
-      .filter((n): n is NavNode => Boolean(n && isNavNodeUnlocked(n, unlockedTracks)));
-    if (valid.length === 0) return NAV_NODES[0];
+      .filter((n): n is NavNode => {
+        if (!n || !isNavNodeUnlocked(n, unlockedTracks)) return false;
+        if (lockedSet && npc.role !== 'railway_police' && npc.role !== 'bd_police') {
+          const np = n.platform ? normalizeVipPlatformTrack(n.platform) : null;
+          if (np && lockedSet.has(np)) return false;
+        }
+        return true;
+      });
+    if (valid.length === 0) {
+      return getNavNode('forecourt_c') ?? NAV_NODES[0];
+    }
     return valid[seqSeed % valid.length];
   };
 
@@ -376,6 +442,10 @@ function getTargetNodeForNpc(
   }
 
   if (npc.role === 'railway_police' || npc.role === 'bd_police') {
+    if (vipProtocol?.active && vipProtocol.lockedPlatforms.length > 0) {
+      const targetPlat = vipProtocol.lockedPlatforms[seqSeed % vipProtocol.lockedPlatforms.length];
+      return pick(platformNavNodeIdsForTrack(targetPlat, unlockedTracks));
+    }
     return pick([
       'p1_center',
       'p1_w',
@@ -391,7 +461,7 @@ function getTargetNodeForNpc(
   }
 
   if (npc.role === 'elderly') {
-    return pick(['p1_bench_w', 'p1_bench_c', 'waiting_room', 'p2_bench_w', 'p2_bench_c', 'p3_bench_c']);
+    return pick(['p1_bench_w', 'p1_bench_c', 'waiting_room', 'p2_bench_w', 'p2_bench_c', 'p3_bench_c', 'forecourt_c']);
   }
 
   if (npc.role === 'beggar') {
@@ -403,7 +473,11 @@ function getTargetNodeForNpc(
   }
 
   if (npc.role === 'tourist') {
-    return pick(['info_board_1', 'office_desk', 'tea_stall', 'fb_n_top', 'p2_center', 'info_board_2', 'p4_center']);
+    return pick(['info_board_1', 'office_desk', 'tea_stall', 'fb_n_top', 'p2_center', 'info_board_2', 'p4_center', 'forecourt_c']);
+  }
+
+  if (vipProtocol?.active) {
+    return pick(getVipEvacuationPoolForPattern(vipProtocol.flowPattern, vipProtocol.lockedPlatforms, unlockedTracks));
   }
 
   // Passengers, Students, Families: follow realistic station routine!
@@ -603,7 +677,8 @@ function locationLabelFromCoords(x: number, y: number, z: number): string {
     if (z < 0) return 'Platform 1';
     if (z <= 12.2) return 'Platform 2';
     if (z <= 28.8) return 'Island Platform 3';
-    return 'South Glass Terminal (Platform 4)';
+    if (z <= 46.8) return 'South Glass Terminal (Platform 4)';
+    return 'Padma High-Speed Platform 5';
   }
   if (x > 30) return 'East Level Crossing';
   return z < 0 ? 'North City Forecourt' : 'South Metro Plaza';
@@ -650,6 +725,25 @@ function syncExpansionStaff(npcState: NpcSimulationState, unlockedTracks: number
     });
 
     npcState.npcs.push(bdOfficer, p4Porter);
+  }
+
+  if (unlockedTracks >= 7 && !npcState.npcs.some((n) => n.id === 'staff_p5_police')) {
+    const p5Node = getNavNode('p5_center') ?? getNavNode('p4_center') ?? NAV_NODES[0];
+    const p5EmpNode = getNavNode('p5_w') ?? p5Node;
+
+    const p5Officer = createNpcAgent('staff_p5_police', npcState.nextNpcSeq++, 'bd_police', p5Node, {
+      workZone: 'Padma Platform 5 High-Speed Security',
+    });
+    p5Officer.speechText = 'পদ্মা হাই-স্পিড প্ল্যাটফর্ম ৫ চালু হয়েছে!';
+    p5Officer.speechSubText = 'Padma Platform 5 Security Active';
+    p5Officer.speechTone = 'police';
+    p5Officer.speechTimer = 4.5;
+
+    const p5Supervisor = createNpcAgent('staff_p5_employee', npcState.nextNpcSeq++, 'railway_employee', p5EmpNode, {
+      workZone: 'Padma Platform 5 Control',
+    });
+
+    npcState.npcs.push(p5Officer, p5Supervisor);
   }
 }
 
@@ -1255,11 +1349,13 @@ export function stepNpcSimulation(
   player: { x: number; y: number; z: number },
   colliders: readonly ColliderBox[],
   dt: number,
+  vipProtocol: VipSecurityProtocol | null = null,
 ): {
   npcState: NpcSimulationState;
   simState: StationSimState;
   playerX: number;
   playerZ: number;
+  vipPlatformCounts: Partial<Record<TrackId, number>>;
   events: NpcStepEvents;
 } {
   let nextSimState = simState;
@@ -1288,7 +1384,7 @@ export function stepNpcSimulation(
   const targetCrowd = computeTargetCrowdSize(nextSimState, trainState);
   npcState.targetCrowdSize = targetCrowd;
 
-  const unlockedTracks = Math.max(2, Math.min(6, nextSimState.unlockedTracks || trainState.unlockedTracks || 2));
+  const unlockedTracks = Math.max(2, Math.min(8, nextSimState.unlockedTracks || trainState.unlockedTracks || 2));
   syncExpansionStaff(npcState, unlockedTracks);
 
   // Step 6 Disembark arriving passengers cleanly from open train doorways
@@ -1536,8 +1632,23 @@ export function stepNpcSimulation(
   const missionById = new Map<string, EmergencyMission>();
   for (const m of npcState.missions) missionById.set(m.id, m);
 
+  const activeVipLockedSet =
+    vipProtocol?.active
+      ? new Set(vipProtocol.lockedPlatforms.map(normalizeVipPlatformTrack))
+      : null;
+  const vipSweepSet =
+    vipProtocol?.active
+      ? new Set(vipProtocol.sweepOrderedPlatforms.map(normalizeVipPlatformTrack))
+      : null;
+
   // Track which trains can accept boarding right now and track queued/stepping counts per doorway
-  const openBoardableTrains = trainState.trains.filter((t) => canPassengerBoardTrain(t).allowed);
+  const openBoardableTrains = trainState.trains.filter((t) => {
+    if (!canPassengerBoardTrain(t).allowed) return false;
+    if (activeVipLockedSet && t.assignedPlatform) {
+      if (activeVipLockedSet.has(normalizeVipPlatformTrack(t.assignedPlatform))) return false;
+    }
+    return true;
+  });
   const boardingTrainById = new Map(trainState.trains.map((t) => [t.id, t]));
   const steppingDoorKeys = new Set<string>();
   const queuedCountByDoor = new Map<string, number>();
@@ -1964,6 +2075,85 @@ export function stepNpcSimulation(
       continue;
     }
 
+    // Emergency VIP Security Flow Pattern Override: evacuate locked platforms along unique routes
+    const npcPlatform = getPlatformTrackForPosition(npc.z, npc.y);
+    const isSecurityOfficer = npc.role === 'railway_police' || npc.role === 'bd_police';
+    if (
+      vipProtocol?.active &&
+      activeVipLockedSet &&
+      !isSecurityOfficer &&
+      npcPlatform !== null &&
+      activeVipLockedSet.has(npcPlatform)
+    ) {
+      npc.waitTimer = 0;
+      npc.memory.boardingStage = 'idle';
+      npc.memory.boardingTrainId = null;
+      npc.memory.targetCoachIndex = null;
+      npc.activity = 'walking';
+
+      const safePool = getVipEvacuationPoolForPattern(
+        vipProtocol.flowPattern,
+        vipProtocol.lockedPlatforms,
+        unlockedTracks,
+      );
+      const currentTargetNode = npc.targetNodeId ? getNavNode(npc.targetNodeId) : undefined;
+      const targetPlatNorm = currentTargetNode?.platform
+        ? normalizeVipPlatformTrack(currentTargetNode.platform)
+        : null;
+      if (
+        npc.route.length === 0 ||
+        npc.routeIdx >= npc.route.length ||
+        !currentTargetNode ||
+        (targetPlatNorm !== null && activeVipLockedSet.has(targetPlatNorm))
+      ) {
+        const currNode = findNearestNavNode(npc.x, npc.y, npc.z, !crossingBlocked, unlockedTracks);
+        const destId = safePool[(i + Math.floor(npcState.simElapsedSec)) % safePool.length] ?? 'forecourt_c';
+        npc.route = findNavPath(currNode.id, destId, {
+          avoidTrackHazards: crossingBlocked,
+          unlockedTracks,
+        });
+        npc.routeIdx = 0;
+        npc.targetNodeId = destId;
+        if (!npc.speechText && npcState.globalBubbleCooldown <= 0) {
+          npc.speechText =
+            vipProtocol.flowPattern === 'red_carpet_concourse_sweep'
+              ? 'ভিআইপি নিরাপত্তা! অন্য প্ল্যাটফর্মে যাচ্ছি!'
+              : 'ভিআইপি নিরাপত্তা কর্ডন! জায়গা খালি করছি!';
+          npc.speechSubText =
+            vipProtocol.flowPattern === 'red_carpet_concourse_sweep'
+              ? 'VIP Sweep — Moving to open platform'
+              : 'VIP Lockdown — Clearing to Concourse';
+          npc.speechTone = 'police';
+          npc.speechTimer = 3.2;
+          npcState.globalBubbleCooldown = 1.6;
+        }
+      }
+
+      const evWp = npc.route[npc.routeIdx] ? getNavNode(npc.route[npc.routeIdx]) : getNavNode('forecourt_c');
+      if (evWp) {
+        const dxE = evWp.x - npc.x;
+        const dzE = evWp.z - npc.z;
+        const distE = Math.hypot(dxE, dzE);
+        if (distE < 0.7) {
+          npc.routeIdx++;
+        } else {
+          const isSweepOrdered = vipSweepSet?.has(npcPlatform) ?? false;
+          const evacSpd = npc.baseSpeed * (isSweepOrdered ? 2.2 : 1.65);
+          npc.x += (dxE / distE) * evacSpd * dt;
+          npc.z += (dzE / distE) * evacSpd * dt;
+          npc.currentSpeed = evacSpd;
+          npc.distanceWalked += evacSpd * dt;
+          npc.yaw = Math.atan2(dxE, dzE);
+          npc.pose = isSweepOrdered ? 'running' : 'walking';
+          const res = resolveCircleAabbCollisions(npc.x, npc.z, npc.y, npc.radius, colliders);
+          npc.x = res.x;
+          npc.z = res.z;
+          npc.y = groundHeightAt(npc.x, npc.z, npc.y, unlockedTracks);
+        }
+        continue;
+      }
+    }
+
     // Step 6: Passenger Doorway Queueing & Boarding AI
     const isBoardingRole =
       npc.role === 'passenger' ||
@@ -2237,6 +2427,7 @@ export function stepNpcSimulation(
         trainState,
         npcState.nextNpcSeq + i * 7 + Math.floor(npcState.simElapsedSec),
         unlockedTracks,
+        vipProtocol,
       );
       if (destNode.id === currNode.id || !isNavNodeUnlocked(destNode, unlockedTracks)) {
         const unlockedPool = NAV_NODES.filter((n) => isNavNodeUnlocked(n, unlockedTracks));
@@ -2441,11 +2632,31 @@ export function stepNpcSimulation(
     }
   }
 
+  const vipPlatformCounts: Partial<Record<TrackId, number>> = {};
+  if (vipProtocol?.active) {
+    for (const pId of vipProtocol.lockedPlatforms) {
+      vipPlatformCounts[pId] = 0;
+    }
+    for (let i = 0; i < npcState.npcs.length; i++) {
+      const n = npcState.npcs[i];
+      if (n.immovable || n.role === 'railway_police' || n.role === 'bd_police') continue;
+      const plat = getPlatformTrackForPosition(n.z, n.y);
+      if (plat !== null) {
+        for (const pId of vipProtocol.lockedPlatforms) {
+          if (normalizeVipPlatformTrack(pId) === plat) {
+            vipPlatformCounts[pId] = (vipPlatformCounts[pId] ?? 0) + 1;
+          }
+        }
+      }
+    }
+  }
+
   return {
     npcState,
     simState: nextSimState,
     playerX: playerCol.playerX,
     playerZ: playerCol.playerZ,
+    vipPlatformCounts,
     events,
   };
 }

@@ -6,6 +6,7 @@ import {
 } from './components/EmergencyDashboardModal';
 import {
   GameCanvas,
+  type ChapterSwitchActions,
   type NpcDialogueCallbacks,
   type PersistenceActions,
   type PointerLockActions,
@@ -20,6 +21,11 @@ import {
 } from './components/NpcDialogueModal';
 import { PauseModal } from './components/PauseModal';
 import {
+  StationOperationsModal,
+  type StationOperationsCallbacks,
+} from './components/StationOperationsModal';
+import { StationSelectorModal } from './components/StationSelectorModal';
+import {
   StationUpgradeModal,
   type StationUpgradeCallbacks,
 } from './components/StationUpgradeModal';
@@ -28,6 +34,11 @@ import {
   TrainDashboardModal,
   type TrainControlCallbacks,
 } from './components/TrainDashboardModal';
+import {
+  buildStationCardSummaries,
+  createInitialMultiStationState,
+  evaluateChapterUnlockStatus,
+} from './game/chapters';
 import { buildStationUpgradeSnapshot } from './game/progression';
 import {
   createDefaultAudioSettings,
@@ -37,20 +48,24 @@ import {
   STATION_NAME_BN,
   STATION_NAME_EN,
 } from './game/rules';
+import { getPrimaryDailyTask } from './game/stationOperations';
 import {
   getSavedShiftSummary,
+  type SavedMultiStationShift,
   type SavedShiftSummary,
-  type SavedStationShift,
 } from './game/storage';
 import { createInitialTrainSimulation } from './game/trainManager';
 import type {
   ActiveNpcDialogue,
   AudioSettings,
   CameraMode,
+  ChapterId,
   EmergencyDashboardSnapshot,
   GamePhase,
   HudSnapshot,
   NpcFloatingBubble,
+  SharedPlayerProfile,
+  StationOperationsSnapshot,
   StationUpgradeSnapshot,
   TouchControlsMode,
   TrainDashboardSnapshot,
@@ -66,10 +81,16 @@ function detectTouchViewport(): boolean {
 }
 
 function createInitialHud(): HudSnapshot {
-  const s = createInitialSimState();
-  const ts = createInitialTrainSimulation(1);
+  const multi = createInitialMultiStationState();
+  const s = multi.chapter1.simState;
+  const ts = multi.chapter1.trainState;
+  const ops = multi.chapter1.opsState;
   const firstTrain = ts.trains[0] ?? null;
+  const dailyTask = getPrimaryDailyTask(ops);
   return {
+    chapterId: 1,
+    chapter2Unlocked: false,
+    chapter1JustCompleted: false,
     stationName: STATION_NAME_EN,
     stationNameBn: STATION_NAME_BN,
     dayNumber: ts.dayNumber,
@@ -92,7 +113,22 @@ function createInitialHud(): HudSnapshot {
     activeCrowdCount: 25,
     activeIncident: null,
     activeMissionsCount: 0,
+    activeOpsCount: ops.activeOpsEvents.length,
     primaryMission: null,
+    activeDailyTask: dailyTask
+      ? {
+          id: dailyTask.id,
+          title: dailyTask.title,
+          current: dailyTask.current,
+          target: dailyTask.target,
+          completed: dailyTask.completed,
+          claimed: dailyTask.claimed,
+        }
+      : null,
+    powerOutageActive: ops.powerOutageActive,
+    paSystemFailed: ops.paSystemFailed,
+    vipSecurityActive: false,
+    vipLockedPlatforms: [],
     availableOfficersCount: 3,
     timeFormatted: formatGameTime(s.gameMinutes),
     dayPeriodLabel: getDayPeriodLabel(s.gameMinutes),
@@ -104,6 +140,8 @@ function createInitialHud(): HudSnapshot {
       4: false,
       5: false,
       6: false,
+      7: false,
+      8: false,
     },
     track1Signal: s.track1Signal,
     track2Signal: s.track2Signal,
@@ -188,6 +226,31 @@ function createInitialEmergencySnapshot(): EmergencyDashboardSnapshot {
   };
 }
 
+function createInitialOperationsSnapshot(): StationOperationsSnapshot {
+  const multi = createInitialMultiStationState();
+  const ch1 = multi.chapter1;
+  return {
+    chapterId: 1,
+    stationName: STATION_NAME_EN,
+    money: ch1.simState.money,
+    reputation: ch1.simState.reputation,
+    satisfaction: ch1.simState.satisfaction,
+    tasks: ch1.opsState.tasks,
+    activeOpsEvents: ch1.opsState.activeOpsEvents,
+    recentResolvedOps: ch1.opsState.recentResolvedOps,
+    staff: ch1.opsState.staff,
+    facilities: ch1.opsState.facilities,
+    finance: ch1.opsState.finance,
+    faultedSignalTracks: ch1.opsState.faultedSignalTracks,
+    obstructedTracks: ch1.opsState.obstructedTracks,
+    powerOutageActive: ch1.opsState.powerOutageActive,
+    paSystemFailed: ch1.opsState.paSystemFailed,
+    vipProtocol: ch1.opsState.vipProtocol,
+    chapterUnlockStatus: evaluateChapterUnlockStatus(ch1.simState, ch1.opsState, false),
+    stationCards: buildStationCardSummaries(multi),
+  };
+}
+
 const NOOP_UPGRADE_ACTIONS: StationUpgradeCallbacks = {
   purchaseUpgrade: () => {},
 };
@@ -209,6 +272,31 @@ const NOOP_EMERGENCY_ACTIONS: EmergencyControlCallbacks = {
   dispatchOfficer: () => {},
   requestPatrolSweep: () => {},
   broadcastEmergencyPa: () => {},
+};
+
+const NOOP_OPS_ACTIONS: StationOperationsCallbacks = {
+  claimTask: () => {},
+  resolveOpsEvent: () => {},
+  spawnOpsEvent: () => {},
+  dispatchUnexpectedTrain: () => {},
+  triggerSimultaneousArrivals: () => {},
+  divertTrainToPlatform: () => {},
+  hireStaff: () => {},
+  assignStaffDuty: () => {},
+  changeStaffShift: () => {},
+  trainStaff: () => {},
+  replaceAbsentStaff: () => {},
+  constructFacility: () => {},
+  upgradeFacility: () => {},
+  repairFacility: () => {},
+  triggerVipSecurity: () => {},
+  clearVipPlatform: () => {},
+  verifyVipCredential: () => {},
+};
+
+const NOOP_CHAPTER_ACTIONS: ChapterSwitchActions = {
+  selectChapter: () => {},
+  dismissCelebration: () => {},
 };
 
 const NOOP_POINTER_LOCK: PointerLockActions = {
@@ -243,6 +331,8 @@ export default function App() {
   const [trainDashboardOpen, setTrainDashboardOpen] = useState(false);
   const [upgradeDashboardOpen, setUpgradeDashboardOpen] = useState(false);
   const [emergencyDashboardOpen, setEmergencyDashboardOpen] = useState(false);
+  const [operationsModalOpen, setOperationsModalOpen] = useState(false);
+  const [stationSelectorOpen, setStationSelectorOpen] = useState(false);
   const [activeNpcDialogue, setActiveNpcDialogue] = useState<ActiveNpcDialogue | null>(null);
   const [dialogueOutcome, setDialogueOutcome] = useState<DialogueOutcomeFeedback | null>(null);
   const [npcBubbles, setNpcBubbles] = useState<NpcFloatingBubble[]>([]);
@@ -260,6 +350,8 @@ export default function App() {
     useState<StationUpgradeSnapshot>(createInitialUpgradeSnapshot);
   const [emergencySnapshot, setEmergencySnapshot] =
     useState<EmergencyDashboardSnapshot>(createInitialEmergencySnapshot);
+  const [operationsSnapshot, setOperationsSnapshot] =
+    useState<StationOperationsSnapshot>(createInitialOperationsSnapshot);
 
   const [touchMode, setTouchMode] = useState<TouchControlsMode>('auto');
   const [autoTouchDetected, setAutoTouchDetected] = useState<boolean>(detectTouchViewport);
@@ -277,6 +369,8 @@ export default function App() {
   const trainActionsRef = useRef<TrainControlCallbacks>(NOOP_ACTIONS);
   const upgradeActionsRef = useRef<StationUpgradeCallbacks>(NOOP_UPGRADE_ACTIONS);
   const emergencyActionsRef = useRef<EmergencyControlCallbacks>(NOOP_EMERGENCY_ACTIONS);
+  const opsActionsRef = useRef<StationOperationsCallbacks>(NOOP_OPS_ACTIONS);
+  const chapterActionsRef = useRef<ChapterSwitchActions>(NOOP_CHAPTER_ACTIONS);
   const npcDialogueActionsRef = useRef<NpcDialogueCallbacks>(NOOP_NPC_DIALOGUE);
   const pointerLockActionsRef = useRef<PointerLockActions>(NOOP_POINTER_LOCK);
   const persistenceActionsRef = useRef<PersistenceActions>(NOOP_PERSISTENCE);
@@ -313,7 +407,7 @@ export default function App() {
     setSavedShiftSummary(getSavedShiftSummary());
   }, []);
 
-  const handleRestoreEnvironment = useCallback((saved: SavedStationShift) => {
+  const handleRestoreEnvironment = useCallback((saved: SavedMultiStationShift) => {
     setCameraMode(saved.cameraMode);
     setWeather(saved.weather);
     setAudioSettings(saved.audioSettings);
@@ -374,6 +468,8 @@ export default function App() {
     setTrainDashboardOpen(false);
     setUpgradeDashboardOpen(false);
     setEmergencyDashboardOpen(false);
+    setOperationsModalOpen(false);
+    setStationSelectorOpen(false);
     setActiveNpcDialogue(null);
     setDialogueOutcome(null);
     document.body.dataset.state = 'playing';
@@ -387,6 +483,8 @@ export default function App() {
     setTrainDashboardOpen(false);
     setUpgradeDashboardOpen(false);
     setEmergencyDashboardOpen(false);
+    setOperationsModalOpen(false);
+    setStationSelectorOpen(false);
     setActiveNpcDialogue(null);
     setDialogueOutcome(null);
     document.body.dataset.state = 'paused';
@@ -419,6 +517,8 @@ export default function App() {
     setTrainDashboardOpen(false);
     setUpgradeDashboardOpen(false);
     setEmergencyDashboardOpen(false);
+    setOperationsModalOpen(false);
+    setStationSelectorOpen(false);
     setActiveNpcDialogue(null);
     setDialogueOutcome(null);
     document.body.dataset.state = 'playing';
@@ -431,6 +531,8 @@ export default function App() {
     setAudioMixerOpen(false);
     setUpgradeDashboardOpen(false);
     setEmergencyDashboardOpen(false);
+    setOperationsModalOpen(false);
+    setStationSelectorOpen(false);
     document.body.dataset.state = 'playing';
     setPhase('playing');
     setTrainDashboardOpen(true);
@@ -452,6 +554,8 @@ export default function App() {
     setAudioMixerOpen(false);
     setTrainDashboardOpen(false);
     setEmergencyDashboardOpen(false);
+    setOperationsModalOpen(false);
+    setStationSelectorOpen(false);
     setActiveNpcDialogue(null);
     document.body.dataset.state = 'playing';
     setPhase('playing');
@@ -474,6 +578,8 @@ export default function App() {
     setAudioMixerOpen(false);
     setTrainDashboardOpen(false);
     setUpgradeDashboardOpen(false);
+    setOperationsModalOpen(false);
+    setStationSelectorOpen(false);
     setActiveNpcDialogue(null);
     document.body.dataset.state = 'playing';
     setPhase('playing');
@@ -491,6 +597,54 @@ export default function App() {
     [blurActiveButton, phase, lockDesktopPointerNow],
   );
 
+  const openOperationsModal = useCallback(() => {
+    unlockPointerNow();
+    setAudioMixerOpen(false);
+    setTrainDashboardOpen(false);
+    setUpgradeDashboardOpen(false);
+    setEmergencyDashboardOpen(false);
+    setStationSelectorOpen(false);
+    setActiveNpcDialogue(null);
+    document.body.dataset.state = 'playing';
+    setPhase('playing');
+    setOperationsModalOpen(true);
+  }, [unlockPointerNow]);
+
+  const closeOperationsModal = useCallback(
+    (restorePointerLock = true) => {
+      blurActiveButton();
+      setOperationsModalOpen(false);
+      if (restorePointerLock && phase === 'playing') {
+        lockDesktopPointerNow();
+      }
+    },
+    [blurActiveButton, phase, lockDesktopPointerNow],
+  );
+
+  const openStationSelector = useCallback(() => {
+    unlockPointerNow();
+    setAudioMixerOpen(false);
+    setTrainDashboardOpen(false);
+    setUpgradeDashboardOpen(false);
+    setEmergencyDashboardOpen(false);
+    setOperationsModalOpen(false);
+    setActiveNpcDialogue(null);
+    document.body.dataset.state = 'playing';
+    setPhase('playing');
+    setStationSelectorOpen(true);
+  }, [unlockPointerNow]);
+
+  const closeStationSelector = useCallback(
+    (restorePointerLock = true) => {
+      blurActiveButton();
+      setStationSelectorOpen(false);
+      if (restorePointerLock && phase === 'playing') {
+        lockDesktopPointerNow();
+      }
+    },
+    [blurActiveButton, phase, lockDesktopPointerNow],
+  );
+
   const openNpcDialogue = useCallback(
     (dialogue: ActiveNpcDialogue) => {
       unlockPointerNow();
@@ -498,6 +652,8 @@ export default function App() {
       setTrainDashboardOpen(false);
       setUpgradeDashboardOpen(false);
       setEmergencyDashboardOpen(false);
+      setOperationsModalOpen(false);
+      setStationSelectorOpen(false);
       setDialogueOutcome(null);
       setActiveNpcDialogue(dialogue);
     },
@@ -521,6 +677,8 @@ export default function App() {
     setTrainDashboardOpen(false);
     setUpgradeDashboardOpen(false);
     setEmergencyDashboardOpen(false);
+    setOperationsModalOpen(false);
+    setStationSelectorOpen(false);
     setActiveNpcDialogue(null);
     setAudioMixerOpen(true);
   }, [unlockPointerNow]);
@@ -604,6 +762,26 @@ export default function App() {
         return;
       }
 
+      if (e.code === 'KeyO' && phase === 'playing' && !audioMixerOpen) {
+        e.preventDefault();
+        if (operationsModalOpen) {
+          closeOperationsModal(true);
+        } else {
+          openOperationsModal();
+        }
+        return;
+      }
+
+      if (e.code === 'KeyC' && phase === 'playing' && !audioMixerOpen) {
+        e.preventDefault();
+        if (stationSelectorOpen) {
+          closeStationSelector(true);
+        } else {
+          openStationSelector();
+        }
+        return;
+      }
+
       if (e.code === 'KeyP' || e.code === 'Escape') {
         e.preventDefault();
         if (audioMixerOpen) {
@@ -622,6 +800,14 @@ export default function App() {
           closeEmergencyDashboard(e.code === 'KeyP');
           return;
         }
+        if (operationsModalOpen) {
+          closeOperationsModal(e.code === 'KeyP');
+          return;
+        }
+        if (stationSelectorOpen) {
+          closeStationSelector(e.code === 'KeyP');
+          return;
+        }
         if (phase === 'playing') {
           pauseGame();
         } else {
@@ -633,7 +819,9 @@ export default function App() {
         !audioMixerOpen &&
         !trainDashboardOpen &&
         !upgradeDashboardOpen &&
-        !emergencyDashboardOpen
+        !emergencyDashboardOpen &&
+        !operationsModalOpen &&
+        !stationSelectorOpen
       ) {
         setCameraMode((prev) => (prev === 'third-person' ? 'first-person' : 'third-person'));
       } else if (e.code === 'KeyM') {
@@ -649,6 +837,8 @@ export default function App() {
     trainDashboardOpen,
     upgradeDashboardOpen,
     emergencyDashboardOpen,
+    operationsModalOpen,
+    stationSelectorOpen,
     activeNpcDialogue,
     dialogueOutcome,
     startGame,
@@ -660,6 +850,10 @@ export default function App() {
     closeUpgradeDashboard,
     openEmergencyDashboard,
     closeEmergencyDashboard,
+    openOperationsModal,
+    closeOperationsModal,
+    openStationSelector,
+    closeStationSelector,
     closeNpcDialogue,
     closeAudioMixer,
   ]);
@@ -668,8 +862,27 @@ export default function App() {
     trainDashboardOpen ||
     upgradeDashboardOpen ||
     emergencyDashboardOpen ||
+    operationsModalOpen ||
+    stationSelectorOpen ||
     audioMixerOpen ||
     Boolean(activeNpcDialogue);
+
+  const sharedProfileView = useMemo<SharedPlayerProfile>(
+    () => ({
+      playerName: 'Station Master',
+      level: hud.level,
+      xp: hud.xp,
+      xpToNext: hud.xpToNext,
+      achievements: emergencySnapshot.achievements,
+      unlockedAbilities: operationsSnapshot.tasks
+        .filter((t) => t.claimed && t.unlockAbility)
+        .map((t) => t.unlockAbility as string),
+      totalDispatchesAllStations: hud.dispatchesCompleted,
+      totalTasksCompleted: operationsSnapshot.tasks.filter((t) => t.completed).length,
+      totalEmergenciesResolved: hud.emergenciesResolved + hud.crimesPrevented,
+    }),
+    [hud, emergencySnapshot.achievements, operationsSnapshot.tasks],
+  );
 
   return (
     <main className="relative w-full h-full overflow-hidden bg-[#162820]">
@@ -689,6 +902,8 @@ export default function App() {
           dashboardOpen={trainDashboardOpen}
           upgradeDashboardOpen={upgradeDashboardOpen}
           emergencyDashboardOpen={emergencyDashboardOpen}
+          operationsModalOpen={operationsModalOpen}
+          stationSelectorOpen={stationSelectorOpen}
           modalOpen={anyModalOpen}
           resetSignal={resetSignal}
           interactTriggerSignal={interactTriggerSignal}
@@ -697,6 +912,8 @@ export default function App() {
           trainActionsRef={trainActionsRef}
           upgradeActionsRef={upgradeActionsRef}
           emergencyActionsRef={emergencyActionsRef}
+          opsActionsRef={opsActionsRef}
+          chapterActionsRef={chapterActionsRef}
           npcDialogueActionsRef={npcDialogueActionsRef}
           pointerLockActionsRef={pointerLockActionsRef}
           persistenceActionsRef={persistenceActionsRef}
@@ -704,8 +921,10 @@ export default function App() {
           onDashboardUpdate={setDashboardSnapshot}
           onUpgradeUpdate={setUpgradeSnapshot}
           onEmergencyUpdate={setEmergencySnapshot}
+          onOperationsUpdate={setOperationsSnapshot}
           onOpenTrainDashboard={openTrainDashboard}
           onOpenUpgradeDashboard={openUpgradeDashboard}
+          onOpenOperationsModal={openOperationsModal}
           onOpenNpcDialogue={openNpcDialogue}
           onBubblesUpdate={setNpcBubbles}
           onAnnouncement={handleAnnouncement}
@@ -719,6 +938,8 @@ export default function App() {
               !trainDashboardOpen &&
               !upgradeDashboardOpen &&
               !emergencyDashboardOpen &&
+              !operationsModalOpen &&
+              !stationSelectorOpen &&
               !activeNpcDialogue &&
               phase === 'playing'
             ) {
@@ -757,16 +978,23 @@ export default function App() {
             onOpenTrainDashboard={openTrainDashboard}
             onOpenUpgradeDashboard={openUpgradeDashboard}
             onOpenEmergencyDashboard={openEmergencyDashboard}
+            onOpenOperationsModal={openOperationsModal}
+            onOpenStationSelector={openStationSelector}
             onPause={pauseGame}
             onInteractClick={() => setInteractTriggerSignal((n) => n + 1)}
           />
 
           {isTouchModeActive && !anyModalOpen && (
-            <MobileControls
-              touchInputRef={touchInputRef}
-              hasNearbyInteraction={Boolean(hud.nearbyPrompt)}
-              nearbyActionLabel={hud.nearbyPrompt?.actionLabel}
-            />
+            <div
+              data-testid="mobile-controls-container"
+              className="fixed mobile-controls-safe z-10 pointer-events-none select-none overflow-hidden"
+            >
+              <MobileControls
+                touchInputRef={touchInputRef}
+                hasNearbyInteraction={Boolean(hud.nearbyPrompt)}
+                nearbyActionLabel={hud.nearbyPrompt?.actionLabel}
+              />
+            </div>
           )}
         </>
       )}
@@ -787,6 +1015,8 @@ export default function App() {
         <TrainDashboardModal
           snapshot={dashboardSnapshot}
           actions={trainActionsRef.current}
+          vipProtocol={operationsSnapshot.vipProtocol}
+          vipActions={opsActionsRef.current}
           onClose={() => closeTrainDashboard(true)}
         />
       )}
@@ -804,6 +1034,31 @@ export default function App() {
           snapshot={emergencySnapshot}
           actions={emergencyActionsRef.current}
           onClose={() => closeEmergencyDashboard(true)}
+        />
+      )}
+
+      {operationsModalOpen && (
+        <StationOperationsModal
+          snapshot={operationsSnapshot}
+          trains={dashboardSnapshot.trains}
+          unlockedTracks={hud.unlockedTracks}
+          actions={opsActionsRef.current}
+          onClose={() => closeOperationsModal(true)}
+        />
+      )}
+
+      {stationSelectorOpen && (
+        <StationSelectorModal
+          activeChapterId={hud.chapterId}
+          chapterUnlockStatus={operationsSnapshot.chapterUnlockStatus}
+          stationCards={operationsSnapshot.stationCards}
+          sharedProfile={sharedProfileView}
+          onSelectChapter={(targetId: ChapterId) => {
+            chapterActionsRef.current.selectChapter(targetId);
+            closeStationSelector(true);
+          }}
+          onDismissCelebration={() => chapterActionsRef.current.dismissCelebration()}
+          onClose={() => closeStationSelector(true)}
         />
       )}
 
@@ -825,6 +1080,8 @@ export default function App() {
           onOpenTrainDashboard={openTrainDashboard}
           onOpenUpgradeDashboard={openUpgradeDashboard}
           onOpenEmergencyDashboard={openEmergencyDashboard}
+          onOpenOperationsModal={openOperationsModal}
+          onOpenStationSelector={openStationSelector}
           onSaveShift={handleSaveShiftFromPause}
           onLoadSavedShift={handleLoadShiftFromPause}
           onResume={resumeGame}
@@ -837,6 +1094,8 @@ export default function App() {
             setTrainDashboardOpen(false);
             setUpgradeDashboardOpen(false);
             setEmergencyDashboardOpen(false);
+            setOperationsModalOpen(false);
+            setStationSelectorOpen(false);
             document.body.dataset.state = 'title';
             setPhase('title');
           }}

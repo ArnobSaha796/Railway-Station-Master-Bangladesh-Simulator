@@ -8,7 +8,7 @@ import {
   TrainTrack,
   X,
 } from 'lucide-react';
-import { STATION_UPGRADE_TIERS } from '../game/progression';
+import { CHAPTER2_UPGRADE_TIERS, STATION_UPGRADE_TIERS } from '../game/progression';
 import type { StationUpgradeSnapshot } from '../game/types';
 
 export interface StationUpgradeCallbacks {
@@ -29,6 +29,9 @@ export function StationUpgradeModal({
   const { currentTier, nextTier, requirements, allRequirementsMet, canAfford, canUpgradeNow } =
     snapshot;
 
+  const isCh2 = snapshot.unlockedTracks >= 7 || snapshot.nextTier?.tracksUnlocked === 8;
+  const maxTracks = isCh2 ? 8 : 6;
+  const roadmapTiers = isCh2 ? CHAPTER2_UPGRADE_TIERS : STATION_UPGRADE_TIERS;
   const isTrackExpansion = Boolean(nextTier && nextTier.tracksUnlocked > snapshot.unlockedTracks);
 
   return (
@@ -88,7 +91,9 @@ export function StationUpgradeModal({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono-tabular">
             <div className="rounded-lg bg-[#0d2016] border border-[#e8b84b]/25 p-3">
               <div className="text-[11px] text-[#cbbd98]">Active Tracks</div>
-              <div className="text-lg font-bold text-[#86efac]">{snapshot.unlockedTracks} / 6</div>
+              <div className="text-lg font-bold text-[#86efac]">
+                {snapshot.unlockedTracks} / {maxTracks}
+              </div>
             </div>
             <div className="rounded-lg bg-[#0d2016] border border-[#e8b84b]/25 p-3">
               <div className="text-[11px] text-[#cbbd98]">Station Treasury</div>
@@ -286,10 +291,14 @@ export function StationUpgradeModal({
           {/* Progression Roadmap */}
           <div className="space-y-2">
             <div className="text-xs font-bold uppercase tracking-wider text-[#d4c6a3]">
-              Station Expansion Roadmap (Levels 1 → 5+)
+              {isCh2
+                ? 'Chapter 2 Expansion Roadmap (Padma Central · 7 → 8 Tracks)'
+                : 'Station Expansion Roadmap (Levels 1 → 5+)'}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
-              {STATION_UPGRADE_TIERS.map((tier) => {
+            <div
+              className={`grid grid-cols-1 gap-2 ${isCh2 ? 'sm:grid-cols-2' : 'sm:grid-cols-5'}`}
+            >
+              {roadmapTiers.map((tier) => {
                 const completed = snapshot.completedTiers.includes(tier.level);
                 const isNext = tier.level === snapshot.stationLevel + 1;
                 return (
