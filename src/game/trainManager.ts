@@ -937,8 +937,17 @@ function buildSafetyAlerts(
   switchPos: SwitchPosition,
   signals: Record<TrackId, SignalAspect>,
   unlockedTracks = 2,
+  vipLockedPlatforms: readonly TrackId[] = [],
 ): RailwaySafetyAlert[] {
   const alerts: RailwaySafetyAlert[] = [];
+
+  for (const lockedTrack of vipLockedPlatforms) {
+    alerts.push({
+      id: `viplock_${lockedTrack}`,
+      severity: 'info',
+      message: `VIP Security Lock: Track ${lockedTrack} secured — regular train arrivals prevented.`,
+    });
+  }
 
   for (const t of trains) {
     if (t.emergencyStopped) {
@@ -1015,6 +1024,7 @@ export function assignTrainPlatform(
   trainId: string,
   platform: TrackId,
   nowMs: number,
+  vipLockedPlatforms: readonly TrackId[] = [],
 ): TrainActionOutcome {
   const unlockedTracks = Math.max(2, Math.min(8, simState.unlockedTracks || trainState.unlockedTracks || 2));
   if (platform > unlockedTracks) {
@@ -1026,6 +1036,31 @@ export function assignTrainPlatform(
       nowMs,
     );
     return { simState: lockedSim, trainState, announcement: null, sound: 'signal', accepted: false };
+  }
+
+  if (vipLockedPlatforms.includes(platform)) {
+    const vipBlockedSim = applyXpAndRewards(
+      simState,
+      {
+        message: `VIP SECURITY LOCK: Platform ${platform} is secured — regular train arrival blocked!`,
+      },
+      nowMs,
+    );
+    const vipAlert: RailwaySafetyAlert = {
+      id: `viplock_${platform}`,
+      severity: 'warning',
+      message: `VIP Security Lock: Platform ${platform} is secured — unlock or assign another track.`,
+    };
+    return {
+      simState: vipBlockedSim,
+      trainState: {
+        ...trainState,
+        alerts: [vipAlert, ...trainState.alerts.filter((a) => a.id !== vipAlert.id)],
+      },
+      announcement: null,
+      sound: 'signal',
+      accepted: false,
+    };
   }
 
   const train = trainState.trains.find((t) => t.id === trainId);
@@ -1863,6 +1898,7 @@ export function stepTrainSimulation(
   trainState: TrainSimulationState,
   dt: number,
   nowMs: number,
+  vipLockedPlatforms: readonly TrackId[] = [],
 ): {
   simState: StationSimState;
   trainState: TrainSimulationState;
@@ -1987,8 +2023,10 @@ export function stepTrainSimulation(
             Math.abs(other.x) <= 34,
         );
 
+      const vipLockedPlatform = vipLockedPlatforms.includes(trackId);
       const signalRedOutsideThroat =
-        distToStop > 34 && (signalAspect === 'red' || !hasPlatform || platformOccupiedByOther);
+        distToStop > 34 &&
+        (signalAspect === 'red' || !hasPlatform || platformOccupiedByOther || vipLockedPlatform);
 
       if (blockedByTrainAhead) {
         t.speed = Math.max(0, t.speed - 16 * dt);
@@ -2006,11 +2044,13 @@ export function stepTrainSimulation(
             t.speed = 0;
           }
         }
-        t.holdingReason = !hasPlatform
-          ? 'Awaiting Platform Assignment'
-          : platformOccupiedByOther
-            ? `Holding: Platform ${t.assignedPlatform} occupied`
-            : `Holding at Track ${trackId} RED Signal`;
+        t.holdingReason = vipLockedPlatform
+          ? `VIP Lock: Platform ${trackId} Secured`
+          : !hasPlatform
+            ? 'Awaiting Platform Assignment'
+            : platformOccupiedByOther
+              ? `Holding: Platform ${t.assignedPlatform} occupied`
+              : `Holding at Track ${trackId} RED Signal`;
       } else {
         t.holdingReason = null;
         if (distToStop <= 36) {
@@ -2168,6 +2208,7 @@ export function stepTrainSimulation(
     trainState.switchPosition,
     signalsRecordFromSim(nextSimState),
     unlockedTracks,
+    vipLockedPlatforms,
   );
 
   return {
@@ -2334,10 +2375,14 @@ export function divertTrainToPlatform(
   trainId: string,
   newPlatform: TrackId,
   nowMs = Date.now(),
+  vipLockedPlatforms: readonly TrackId[] = [],
 ): TrainActionOutcome {
   const target = trainState.trains.find((t) => t.id === trainId);
   if (!target) {
     return { simState, trainState, announcement: null, sound: null, accepted: false };
+  }
+  if (vipLockedPlatforms.includes(newPlatform)) {
+    return assignTrainPlatform(simState, trainState, trainId, newPlatform, nowMs, vipLockedPlatforms);
   }
   const reset = {
     ...trainState,
@@ -2352,5 +2397,5 @@ export function divertTrainToPlatform(
         : t,
     ),
   };
-  return assignTrainPlatform(simState, reset, trainId, newPlatform, nowMs);
+  return assignTrainPlatform(simState, reset, trainId, newPlatform, nowMs, vipLockedPlatforms);
 }

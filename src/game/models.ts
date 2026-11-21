@@ -6,6 +6,7 @@ import {
   createCoachNumberPlateTexture,
   createContactShadowTexture,
   createCorrugatedTexture,
+  createKilometerPostTexture,
   createSignboardTexture,
 } from './textures';
 import type { SignalAspect, SwitchPosition, TrainCategory } from './types';
@@ -1583,9 +1584,17 @@ export function createLevelCrossing(): CrossingController {
   roadS.receiveShadow = true;
   group.add(roadN, roadS);
 
-  // Dashed road centerline
+  // Dashed road centerline (skip track ballast zones)
   for (let rz = -42; rz <= 42; rz += 5) {
     if (Math.abs(rz) < 7) continue;
+    if (
+      Math.abs(rz - 13.3) < 2.6 ||
+      Math.abs(rz - 19.3) < 2.6 ||
+      Math.abs(rz - 29.8) < 2.6 ||
+      Math.abs(rz - 35.8) < 2.6
+    ) {
+      continue;
+    }
     const dash = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.02, 2.2), whiteMat);
     dash.position.set(0, 0.055, rz);
     group.add(dash);
@@ -2727,6 +2736,411 @@ export function createExtendedFootbridgeSection(
       group.add(handrail);
     });
   });
+
+  return group;
+}
+
+export function createSignalGantryBridge(
+  spanZ: number,
+  trackOffsetsZ: number[],
+  labelBn: string,
+  labelEn: string,
+  maxAnisotropy: number,
+): THREE.Group {
+  const group = new THREE.Group();
+  const concreteMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.88 });
+  const steelMat = new THREE.MeshStandardMaterial({ color: 0x26323d, roughness: 0.48, metalness: 0.25 });
+  const catwalkMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.65, metalness: 0.2 });
+  const yellowRailMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.42 });
+  const hoodMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.45 });
+  const greenLensMat = new THREE.MeshStandardMaterial({
+    color: 0x22c55e,
+    emissive: 0x16a34a,
+    emissiveIntensity: 1.55,
+    roughness: 0.18,
+  });
+  const amberLensMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b,
+    emissive: 0xd97706,
+    emissiveIntensity: 0.55,
+    roughness: 0.2,
+  });
+  const redLensMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    emissive: 0xdc2626,
+    emissiveIntensity: 0.28,
+    roughness: 0.2,
+  });
+
+  const deckY = 6.35;
+  const halfSpan = spanZ / 2;
+
+  // Twin portal support towers & concrete plinth footings outside track clearance
+  [-halfSpan, halfSpan].forEach((pz, sideIdx) => {
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.48, 0.95), concreteMat);
+    plinth.position.set(0, 0.24, pz);
+    plinth.receiveShadow = true;
+
+    const legA = new THREE.Mesh(new THREE.BoxGeometry(0.24, deckY + 0.5, 0.24), steelMat);
+    legA.position.set(-0.26, (deckY + 0.5) / 2, pz);
+    legA.castShadow = true;
+
+    const legB = new THREE.Mesh(new THREE.BoxGeometry(0.24, deckY + 0.5, 0.24), steelMat);
+    legB.position.set(0.26, (deckY + 0.5) / 2, pz);
+    legB.castShadow = true;
+
+    group.add(plinth, legA, legB);
+
+    // Horizontal & diagonal lattice rungs between paired portal legs
+    for (let y = 1.2; y < deckY; y += 1.35) {
+      const rung = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.09, 0.14), steelMat);
+      rung.position.set(0, y, pz);
+      group.add(rung);
+    }
+
+    // Safety access ladder on north tower leg
+    if (sideIdx === 0) {
+      const ladderL = new THREE.Mesh(new THREE.BoxGeometry(0.04, deckY + 0.7, 0.04), yellowRailMat);
+      ladderL.position.set(0.0, (deckY + 0.7) / 2, pz - 0.34);
+      const ladderR = new THREE.Mesh(new THREE.BoxGeometry(0.04, deckY + 0.7, 0.04), yellowRailMat);
+      ladderR.position.set(0.28, (deckY + 0.7) / 2, pz - 0.34);
+      group.add(ladderL, ladderR);
+    }
+  });
+
+  // Overhead steel truss bridge beam & maintenance catwalk
+  const lowerChord = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.22, spanZ + 0.6), catwalkMat);
+  lowerChord.position.set(0, deckY, 0);
+  lowerChord.castShadow = true;
+  const upperChord = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.16, spanZ + 0.5), steelMat);
+  upperChord.position.set(0, deckY + 1.02, 0);
+  group.add(lowerChord, upperChord);
+
+  // Side safety guardrails & vertical truss struts
+  [-0.42, 0.42].forEach((rx) => {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, spanZ + 0.4), yellowRailMat);
+    rail.position.set(rx, deckY + 0.58, 0);
+    group.add(rail);
+  });
+
+  for (let z = -halfSpan + 0.8; z <= halfSpan - 0.8; z += 1.65) {
+    [-0.4, 0.4].forEach((rx) => {
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.0, 0.07), steelMat);
+      strut.position.set(rx, deckY + 0.5, z);
+      group.add(strut);
+    });
+  }
+
+  // Bilingual Railway Route Signboard centered on gantry
+  const boardTex = createSignboardTexture(labelBn, labelEn, '#113c2a', '#facc15', maxAnisotropy);
+  const boardMat = new THREE.MeshStandardMaterial({ map: boardTex, color: 0xffffff, roughness: 0.42 });
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.82, Math.min(4.8, spanZ * 0.46)), boardMat);
+  board.position.set(0, deckY + 0.6, 0);
+  group.add(board);
+
+  // Double-sided colour-light signal aspect heads centered over each track
+  trackOffsetsZ.forEach((tz, idx) => {
+    const sigHead = new THREE.Mesh(new THREE.BoxGeometry(0.46, 1.15, 0.48), hoodMat);
+    sigHead.position.set(0, deckY - 0.35, tz);
+    group.add(sigHead);
+
+    [-0.25, 0.25].forEach((faceX) => {
+      const lensColors =
+        idx % 2 === 0
+          ? [redLensMat, amberLensMat, greenLensMat]
+          : [amberLensMat, greenLensMat, redLensMat];
+      lensColors.forEach((lMat, li) => {
+        const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.06, 10), lMat);
+        lens.rotation.z = Math.PI / 2;
+        lens.position.set(faceX, deckY - 0.02 - li * 0.32, tz);
+        group.add(lens);
+      });
+    });
+  });
+
+  return group;
+}
+
+export function createYardFloodlightMast(sharedBulbMat: THREE.MeshStandardMaterial): THREE.Group {
+  const group = new THREE.Group();
+  const concreteMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.9 });
+  const mastMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.42, metalness: 0.25 });
+  const yellowMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.45 });
+  const housingMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.45 });
+  const beaconMat = new THREE.MeshStandardMaterial({
+    color: 0xff3b30,
+    emissive: 0xff2a1f,
+    emissiveIntensity: 1.4,
+    roughness: 0.25,
+  });
+
+  const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.56, 0.55, 8), concreteMat);
+  plinth.position.y = 0.275;
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, 0.35, 8), yellowMat);
+  collar.position.y = 0.7;
+
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.22, 9.6, 10), mastMat);
+  mast.position.y = 5.4;
+  mast.castShadow = true;
+
+  const crossBar = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.16, 2.2), mastMat);
+  crossBar.position.y = 10.1;
+  group.add(plinth, collar, mast, crossBar);
+
+  [-0.78, -0.26, 0.26, 0.78].forEach((lz) => {
+    const pod = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.28, 0.36), housingMat);
+    pod.position.set(0.18, 10.05, lz);
+    pod.rotation.z = -0.35;
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.22, 0.3), sharedBulbMat);
+    bulb.position.set(0.39, 9.98, lz);
+    bulb.rotation.z = -0.35;
+    group.add(pod, bulb);
+  });
+
+  const apexRod = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 0.7, 6), mastMat);
+  apexRod.position.y = 10.55;
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 8), beaconMat);
+  beacon.position.y = 10.95;
+  group.add(apexRod, beacon);
+
+  return group;
+}
+
+export function createDwarfShuntSignal(aspect: 'amber' | 'green' = 'amber'): THREE.Group {
+  const group = new THREE.Group();
+  const baseMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.88 });
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.45, metalness: 0.22 });
+  const stripeMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.48 });
+  const lensHex = aspect === 'green' ? 0x22c55e : 0xfbbf24;
+  const lensMat = new THREE.MeshStandardMaterial({
+    color: lensHex,
+    emissive: lensHex,
+    emissiveIntensity: 1.5,
+    roughness: 0.18,
+  });
+
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.14, 0.48), baseMat);
+  plinth.position.y = 0.07;
+  const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.22, 8), stripeMat);
+  ped.position.y = 0.25;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.34, 0.32), bodyMat);
+  head.position.y = 0.5;
+  head.castShadow = true;
+
+  const lensEast = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), lensMat);
+  lensEast.position.set(0.15, 0.52, 0);
+  const lensWest = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), lensMat);
+  lensWest.position.set(-0.15, 0.52, 0);
+
+  group.add(plinth, ped, head, lensEast, lensWest);
+  return group;
+}
+
+export function createRelayEquipmentCabinet(): THREE.Group {
+  const group = new THREE.Group();
+  const concreteMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.9 });
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.52, metalness: 0.18 });
+  const roofMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.42, metalness: 0.25 });
+  const bandMat = new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.46 });
+  const statusMat = new THREE.MeshStandardMaterial({
+    color: 0x22c55e,
+    emissive: 0x16a34a,
+    emissiveIntensity: 1.4,
+    roughness: 0.2,
+  });
+
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.18, 1.05), concreteMat);
+  pad.position.y = 0.09;
+  const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.22, 1.38, 0.78), boxMat);
+  cabinet.position.y = 0.87;
+  cabinet.castShadow = true;
+  cabinet.receiveShadow = true;
+
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.32, 0.1, 0.9), roofMat);
+  roof.position.y = 1.6;
+  roof.rotation.x = 0.06;
+
+  const hazardBand = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.12, 0.8), bandMat);
+  hazardBand.position.y = 0.48;
+
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), statusMat);
+  led.position.set(0.46, 1.42, 0.4);
+
+  group.add(pad, cabinet, roof, hazardBand, led);
+  return group;
+}
+
+export function createKilometerMarkerPost(
+  topText: string,
+  bottomText: string,
+  maxAnisotropy: number,
+): THREE.Group {
+  const group = new THREE.Group();
+  const concreteMat = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.82 });
+  const baseBandMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.75 });
+  const faceTex = createKilometerPostTexture(topText, bottomText, '#f5b81c', '#171717', maxAnisotropy);
+  const faceMat = new THREE.MeshStandardMaterial({ map: faceTex, color: 0xffffff, roughness: 0.5 });
+
+  const footing = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.28, 0.28), baseBandMat);
+  footing.position.y = 0.14;
+  const post = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.74, 0.18), concreteMat);
+  post.position.y = 0.65;
+  post.castShadow = true;
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.46, 0.12), [
+    concreteMat,
+    concreteMat,
+    concreteMat,
+    concreteMat,
+    faceMat,
+    faceMat,
+  ]);
+  board.position.y = 1.05;
+  board.castShadow = true;
+
+  group.add(footing, post, board);
+  return group;
+}
+
+export function createReserveSleeperStack(): THREE.Group {
+  const group = new THREE.Group();
+  const concreteTieMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.88 });
+  const strapMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.5 });
+  const railMat = new THREE.MeshStandardMaterial({ color: 0x6b4f3b, roughness: 0.65, metalness: 0.2 });
+
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      const tie = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.12, 2.2), concreteTieMat);
+      tie.position.set((col - 1) * 0.33, 0.06 + row * 0.13, 0);
+      tie.castShadow = true;
+      tie.receiveShadow = true;
+      group.add(tie);
+    }
+  }
+
+  [-0.65, 0.65].forEach((sz) => {
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.4, 0.06), strapMat);
+    strap.position.set(0, 0.2, sz);
+    group.add(strap);
+  });
+
+  // Two spare rail sections resting on timber skids beside the sleeper stack
+  [-0.14, 0.14].forEach((rz) => {
+    const spareRail = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.11, 0.09), railMat);
+    spareRail.position.set(0, 0.055, 1.45 + rz);
+    group.add(spareRail);
+  });
+
+  return group;
+}
+
+export function createOvergrownWeedClusterGeometry(tall: boolean): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  let vertCursor = 0;
+
+  const bladeCount = tall ? 9 : 7;
+  for (let b = 0; b < bladeCount; b++) {
+    const angle = (b / bladeCount) * Math.PI * 2 + (b % 2) * 0.25;
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+    const tx = -sinA;
+    const tz = cosA;
+
+    const baseOffset = 0.02 + (b % 3) * 0.025;
+    const hScale = tall ? 0.44 + (b % 4) * 0.08 : 0.24 + (b % 3) * 0.055;
+    const leanOut = tall ? 0.16 + (b % 3) * 0.045 : 0.15 + (b % 3) * 0.04;
+    const halfBaseW = tall ? 0.026 : 0.032;
+    const halfMidW = tall ? 0.018 : 0.022;
+
+    const bx = cosA * baseOffset;
+    const bz = sinA * baseOffset;
+    const mx = cosA * (baseOffset + leanOut * 0.45);
+    const my = hScale * 0.56;
+    const mz = sinA * (baseOffset + leanOut * 0.45);
+    const tipX = cosA * (baseOffset + leanOut);
+    const tipY = hScale;
+    const tipZ = sinA * (baseOffset + leanOut);
+
+    positions.push(
+      bx - tx * halfBaseW, 0.0, bz - tz * halfBaseW,
+      bx + tx * halfBaseW, 0.0, bz + tz * halfBaseW,
+      mx - tx * halfMidW, my, mz - tz * halfMidW,
+      mx + tx * halfMidW, my, mz + tz * halfMidW,
+      tipX, tipY, tipZ,
+    );
+
+    const v0 = vertCursor;
+    indices.push(v0, v0 + 1, v0 + 2);
+    indices.push(v0 + 1, v0 + 3, v0 + 2);
+    indices.push(v0 + 2, v0 + 3, v0 + 4);
+    vertCursor += 5;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+export function createDiscardedRustedSleeperCluster(
+  sleeperMat: THREE.Material,
+  count: 2 | 3,
+): THREE.Group {
+  const group = new THREE.Group();
+  const rustPlateMat = new THREE.MeshStandardMaterial({
+    color: 0x7b3b22,
+    roughness: 0.78,
+    metalness: 0.32,
+  });
+  const oxidizedBoltMat = new THREE.MeshStandardMaterial({
+    color: 0x5c2b1a,
+    roughness: 0.72,
+    metalness: 0.35,
+  });
+
+  const tieGeo = new THREE.BoxGeometry(0.28, 0.1, 2.34);
+  const plateGeo = new THREE.BoxGeometry(0.22, 0.025, 0.28);
+  const spikeGeo = new THREE.CylinderGeometry(0.015, 0.012, 0.07, 6);
+
+  const offsets: [number, number, number, number][] = [
+    [-0.18, 0.05, 0, 0.06],
+    [0.2, 0.05, 0.08, -0.14],
+    [0.02, 0.145, -0.05, 0.24],
+  ];
+
+  for (let i = 0; i < count; i++) {
+    const [ox, oy, oz, rotY] = offsets[i];
+    const tie = new THREE.Group();
+    tie.position.set(ox, oy, oz);
+    tie.rotation.y = rotY;
+    if (i === 2) tie.rotation.z = 0.05;
+
+    const beam = new THREE.Mesh(tieGeo, sleeperMat);
+    beam.castShadow = true;
+    beam.receiveShadow = true;
+    tie.add(beam);
+
+    [-0.72, 0.72].forEach((pz) => {
+      const plate = new THREE.Mesh(plateGeo, rustPlateMat);
+      plate.position.set(0, 0.056, pz);
+      tie.add(plate);
+
+      [-0.06, 0.06].forEach((sx) => {
+        const spike = new THREE.Mesh(spikeGeo, oxidizedBoltMat);
+        spike.position.set(sx, 0.082, pz);
+        spike.rotation.z = sx * 1.4;
+        tie.add(spike);
+      });
+    });
+
+    group.add(tie);
+  }
+
+  const fishplate = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.04, 0.08), rustPlateMat);
+  fishplate.position.set(0.38, 0.03, 0.52);
+  fishplate.rotation.y = 0.48;
+  group.add(fishplate);
 
   return group;
 }

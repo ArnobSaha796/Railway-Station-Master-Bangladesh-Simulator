@@ -362,20 +362,28 @@ export function StationOperationsModal({
                             </span>
                           </div>
                           <div className="flex flex-wrap items-center gap-1">
-                            {trackList.map((trackId) => (
-                              <button
-                                key={trackId}
-                                type="button"
-                                onClick={() => actions.divertTrainToPlatform(t.id, trackId)}
-                                className={`px-2 py-1 rounded text-[11px] font-bold cursor-pointer border ${
-                                  t.assignedPlatform === trackId
-                                    ? 'bg-[#e8b84b] text-[#14241b] border-[#f5c756]'
-                                    : 'bg-[#0c1d14] text-[#dfd5bc] border-[#e8b84b]/25 hover:bg-[#183b29]'
-                                }`}
-                              >
-                                Divert P{trackId}
-                              </button>
-                            ))}
+                            {trackList.map((trackId) => {
+                              const isVipLocked =
+                                Boolean(snapshot.vipProtocol?.active) &&
+                                snapshot.vipProtocol!.lockedPlatforms.includes(trackId);
+                              return (
+                                <button
+                                  key={trackId}
+                                  type="button"
+                                  disabled={isVipLocked}
+                                  onClick={() => actions.divertTrainToPlatform(t.id, trackId)}
+                                  className={`px-2 py-1 rounded text-[11px] font-bold border ${
+                                    isVipLocked
+                                      ? 'bg-[#3d1818] text-[#fca5a5] border-[#ef4444]/60 opacity-65 cursor-not-allowed'
+                                      : t.assignedPlatform === trackId
+                                        ? 'bg-[#e8b84b] text-[#14241b] border-[#f5c756] cursor-pointer'
+                                        : 'bg-[#0c1d14] text-[#dfd5bc] border-[#e8b84b]/25 hover:bg-[#183b29] cursor-pointer'
+                                  }`}
+                                >
+                                  {isVipLocked ? `P${trackId} Locked` : `Divert P${trackId}`}
+                                </button>
+                              );
+                            })}
                           </div>
                         </div>
                       ))}

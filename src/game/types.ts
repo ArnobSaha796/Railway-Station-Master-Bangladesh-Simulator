@@ -226,6 +226,7 @@ export interface TrainDashboardSnapshot {
   trackOccupancies: Record<TrackId, TrackBlockOccupancy>;
   trains: ManagedTrain[];
   alerts: RailwaySafetyAlert[];
+  vipLockedPlatforms?: TrackId[];
 }
 
 export type NpcRole =
@@ -782,12 +783,16 @@ export interface VipSecurityProtocol {
   flowPattern: VipFlowPattern;
   flowPatternLabel: string;
   flowPatternDescription: string;
+  designatedPlatforms: TrackId[];
+  securedPlatforms: TrackId[];
   lockedPlatforms: TrackId[];
   sweepOrderedPlatforms: TrackId[];
   clearedPlatforms: TrackId[];
   platformPassengerCounts: Partial<Record<TrackId, number>>;
+  platformDensityTargets: Partial<Record<TrackId, 'cleared' | 'elevated' | 'normal'>>;
   credentials: VipCredentialRecord[];
   expectedManifestPrefix: string;
+  securityClearanceVerified: boolean;
   passengersOnLockedPlatforms: number;
   initialPassengersOnLockedPlatforms: number;
   corridorEvacuationPct: number;

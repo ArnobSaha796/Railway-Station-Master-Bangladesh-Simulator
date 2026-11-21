@@ -1322,16 +1322,18 @@ export function resolveOpsEmergency(
     ops.vipProtocol?.active &&
     ops.vipProtocol.eventId === ev.id
   ) {
-    const allCleared = ops.vipProtocol.lockedPlatforms.every((p) =>
-      ops.vipProtocol!.clearedPlatforms.includes(p),
-    );
+    const reqPlatforms = ops.vipProtocol.designatedPlatforms.length > 0
+      ? ops.vipProtocol.designatedPlatforms
+      : ops.vipProtocol.lockedPlatforms;
+    const allSecured = reqPlatforms.every((p) => ops.vipProtocol!.lockedPlatforms.includes(p));
+    const allCleared = reqPlatforms.every((p) => ops.vipProtocol!.clearedPlatforms.includes(p));
     const allVerified = ops.vipProtocol.credentials.every((c) => c.status !== 'pending');
-    if (!allCleared || !allVerified) {
+    if (!allSecured || !allCleared || !allVerified || !ops.vipProtocol.securityClearanceVerified) {
       const denied = applyXpAndRewards(
         simState,
         {
           message:
-            'Complete VIP Control Room checklist first: Clear locked platform(s) & verify all 3 delegate credentials.',
+            'Complete VIP Control Room checklist first: Secure platform(s), clear crowds, audit 3 badges & Verify Security Clearance.',
         },
         nowMs,
       );
@@ -1910,11 +1912,22 @@ const VIP_FLOW_ORDER: readonly VipFlowPattern[] = [
 ];
 
 function computeVipProtocolProgressPct(protocol: VipSecurityProtocol): number {
-  const platformTotal = Math.max(1, protocol.lockedPlatforms.length);
-  const platformDone = protocol.clearedPlatforms.length;
+  const targetPlats =
+    protocol.designatedPlatforms.length > 0
+      ? protocol.designatedPlatforms
+      : protocol.lockedPlatforms;
+  const platTotal = Math.max(1, targetPlats.length);
+  const securedDone = targetPlats.filter((p) => protocol.lockedPlatforms.includes(p)).length;
+  const clearedDone = targetPlats.filter((p) => protocol.clearedPlatforms.includes(p)).length;
   const credTotal = Math.max(1, protocol.credentials.length);
   const credDone = protocol.credentials.filter((c) => c.status !== 'pending').length;
-  const pct = ((platformDone / platformTotal) * 0.5 + (credDone / credTotal) * 0.5) * 100;
+  const clearanceDone = protocol.securityClearanceVerified ? 1 : 0;
+  const pct =
+    ((securedDone / platTotal) * 0.25 +
+      (clearedDone / platTotal) * 0.25 +
+      (credDone / credTotal) * 0.35 +
+      clearanceDone * 0.15) *
+    100;
   return Math.max(0, Math.min(100, Math.round(pct)));
 }
 
@@ -2093,11 +2106,17 @@ export function triggerEmergencyVipSecurity(
   const spec = VIP_FLOW_PATTERN_SPECS[pattern];
   const unlocked = Math.max(2, Math.min(chapterId === 2 ? 8 : 6, simState.unlockedTracks || 2));
 
-  let lockedPlatforms: TrackId[] = [1];
+  let designatedPlatforms: TrackId[] = [1];
   if (pattern === 'red_carpet_concourse_sweep') {
-    lockedPlatforms = [unlocked >= 4 ? 4 : 2];
+    designatedPlatforms = [unlocked >= 4 ? 4 : 2];
   } else if (pattern === 'split_platform_lockdown') {
-    lockedPlatforms = unlocked >= 4 ? [1, 4] : [1, 2];
+    designatedPlatforms = unlocked >= 4 ? [1, 4] : [1, 2];
+  }
+
+  const platformDensityTargets: Partial<Record<TrackId, 'cleared' | 'elevated' | 'normal'>> = {};
+  for (let i = 1; i <= unlocked; i++) {
+    const tid = i as TrackId;
+    platformDensityTargets[tid] = designatedPlatforms.includes(tid) ? 'cleared' : 'elevated';
   }
 
   const { manifestPrefix, credentials } = buildVipCredentialsForPattern(pattern, seed);
@@ -2112,12 +2131,16 @@ export function triggerEmergencyVipSecurity(
     flowPattern: pattern,
     flowPatternLabel: spec.flowPatternLabel,
     flowPatternDescription: spec.flowPatternDescription,
-    lockedPlatforms,
+    designatedPlatforms,
+    securedPlatforms: [],
+    lockedPlatforms: [],
     sweepOrderedPlatforms: [],
     clearedPlatforms: [],
     platformPassengerCounts: {},
+    platformDensityTargets,
     credentials,
     expectedManifestPrefix: manifestPrefix,
+    securityClearanceVerified: false,
     passengersOnLockedPlatforms: 0,
     initialPassengersOnLockedPlatforms: 0,
     corridorEvacuationPct: 0,
@@ -2134,13 +2157,13 @@ export function triggerEmergencyVipSecurity(
     kind: 'vip_security',
     title: `${tpl.title} · ${spec.codename}`,
     titleBn: tpl.titleBn,
-    objective: `Clear Platform ${lockedPlatforms.join(' & ')} and verify 3 VIP delegation credentials in Control Room.`,
+    objective: `Secure Platform ${designatedPlatforms.join(' & ')} in Train Dashboard, clear crowds, audit 3 badges & Verify Security Clearance.`,
     actionLabel: 'Verify in Control Room',
-    locationLabel: `Platform ${lockedPlatforms.join(' & ')} Security Cordon`,
-    trackId: lockedPlatforms[0],
+    locationLabel: `Platform ${designatedPlatforms.join(' & ')} Security Cordon`,
+    trackId: designatedPlatforms[0],
     facilityId: 'security_control_room',
     x: 0.5,
-    z: lockedPlatforms[0] === 1 ? -7.5 : 7.0,
+    z: designatedPlatforms[0] === 1 ? -7.5 : 7.0,
     severity: 'critical',
     timeRemainingSec: maxTimeSec,
     maxTimeSec,
@@ -2160,7 +2183,7 @@ export function triggerEmergencyVipSecurity(
   const nextSim = applyXpAndRewards(
     simState,
     {
-      message: `EMERGENCY VIP SECURITY TRIGGERED (${spec.codename}): ${spec.flowPatternLabel} — clear P${lockedPlatforms.join('/P')} & verify credentials!`,
+      message: `EMERGENCY VIP SECURITY (${spec.codename}): Density shifted — click 'Secure' on Platform ${designatedPlatforms.join('/')} in Train Dashboard & Verify Security Clearance!`,
     },
     nowMs,
   );
@@ -2178,6 +2201,69 @@ export function triggerEmergencyVipSecurity(
   };
 }
 
+export function toggleVipPlatformLock(
+  simState: StationSimState,
+  ops: StationOperationsState,
+  platformId: TrackId,
+  nowMs = Date.now(),
+): {
+  accepted: boolean;
+  locked: boolean;
+  simState: StationSimState;
+  opsState: StationOperationsState;
+  announcement: string | null;
+} {
+  const proto = ops.vipProtocol;
+  if (!proto || !proto.active || platformId > (simState.unlockedTracks || 2)) {
+    return { accepted: false, locked: false, simState, opsState: ops, announcement: null };
+  }
+
+  const alreadyLocked = proto.lockedPlatforms.includes(platformId);
+  const nextLocked = alreadyLocked
+    ? proto.lockedPlatforms.filter((p) => p !== platformId)
+    : [...proto.lockedPlatforms, platformId];
+
+  const nextDensityTargets: Partial<Record<TrackId, 'cleared' | 'elevated' | 'normal'>> = {
+    ...proto.platformDensityTargets,
+    [platformId]: !alreadyLocked
+      ? 'cleared'
+      : proto.designatedPlatforms.includes(platformId)
+        ? 'cleared'
+        : 'elevated',
+  };
+
+  const updatedProto: VipSecurityProtocol = {
+    ...proto,
+    securedPlatforms: nextLocked,
+    lockedPlatforms: nextLocked,
+    platformDensityTargets: nextDensityTargets,
+  };
+
+  const nextSim = applyXpAndRewards(
+    simState,
+    {
+      xpDelta: !alreadyLocked ? 10 : 0,
+      message: !alreadyLocked
+        ? `Platform ${platformId} SECURED for VIP Protocol — regular train arrivals locked out!`
+        : `Platform ${platformId} VIP lock released — normal train arrivals resumed.`,
+    },
+    nowMs,
+  );
+
+  return {
+    accepted: true,
+    locked: !alreadyLocked,
+    simState: nextSim,
+    opsState: {
+      ...ops,
+      vipProtocol: updatedProto,
+    },
+    announcement: !alreadyLocked
+      ? `সতর্কতা: ${platformId} নম্বর প্ল্যাটফর্ম ভিআইপি নিরাপত্তার জন্য লক করা হয়েছে।`
+      : null,
+  };
+}
+
 export function orderClearVipPlatform(
   simState: StationSimState,
   ops: StationOperationsState,
@@ -2191,7 +2277,10 @@ export function orderClearVipPlatform(
   announcement: string | null;
 } {
   const proto = ops.vipProtocol;
-  if (!proto || !proto.active || !proto.lockedPlatforms.includes(platformId)) {
+  const trackedSet = proto
+    ? new Set([...proto.designatedPlatforms, ...proto.lockedPlatforms])
+    : new Set<TrackId>();
+  if (!proto || !proto.active || !trackedSet.has(platformId)) {
     return { accepted: false, completed: false, simState, opsState: ops, announcement: null };
   }
 
@@ -2210,12 +2299,14 @@ export function orderClearVipPlatform(
       ? [...proto.clearedPlatforms, platformId]
       : proto.clearedPlatforms;
 
+  const targetPlats =
+    proto.designatedPlatforms.length > 0 ? proto.designatedPlatforms : proto.lockedPlatforms;
   const updatedProto: VipSecurityProtocol = {
     ...proto,
     sweepOrderedPlatforms,
     clearedPlatforms,
     corridorEvacuationPct:
-      clearedPlatforms.length === proto.lockedPlatforms.length
+      targetPlats.length > 0 && targetPlats.every((p) => clearedPlatforms.includes(p))
         ? 100
         : proto.corridorEvacuationPct,
   };
@@ -2272,11 +2363,15 @@ export function syncVipPlatformOccupancy(
     };
   }
 
+  const monitoredPlatforms = Array.from(
+    new Set([...proto.designatedPlatforms, ...proto.lockedPlatforms]),
+  );
+
   let totalRemaining = 0;
   const newlyClearedPlatforms: TrackId[] = [];
   const nextCleared = [...proto.clearedPlatforms];
 
-  for (const pId of proto.lockedPlatforms) {
+  for (const pId of monitoredPlatforms) {
     const cnt = Math.max(0, countsByPlatform[pId] ?? 0);
     totalRemaining += cnt;
     if (cnt === 0 && proto.sweepOrderedPlatforms.includes(pId) && !nextCleared.includes(pId)) {
@@ -2285,15 +2380,18 @@ export function syncVipPlatformOccupancy(
     }
   }
 
+  const targetPlats =
+    proto.designatedPlatforms.length > 0 ? proto.designatedPlatforms : proto.lockedPlatforms;
   const initialPeak = Math.max(proto.initialPassengersOnLockedPlatforms, totalRemaining);
-  const evacPct =
-    nextCleared.length === proto.lockedPlatforms.length
-      ? 100
-      : initialPeak > 0
-        ? Math.min(99, Math.round(((initialPeak - totalRemaining) / initialPeak) * 100))
-        : proto.sweepOrderedPlatforms.length > 0
-          ? 85
-          : 0;
+  const allTargetsCleared =
+    targetPlats.length > 0 && targetPlats.every((p) => nextCleared.includes(p));
+  const evacPct = allTargetsCleared
+    ? 100
+    : initialPeak > 0
+      ? Math.min(99, Math.round(((initialPeak - totalRemaining) / initialPeak) * 100))
+      : proto.sweepOrderedPlatforms.length > 0
+        ? 85
+        : 0;
 
   const updatedProto: VipSecurityProtocol = {
     ...proto,
@@ -2310,7 +2408,7 @@ export function syncVipPlatformOccupancy(
       simState,
       {
         xpDelta: 15 * newlyClearedPlatforms.length,
-        message: `VIP Perimeter Secured: Platform ${newlyClearedPlatforms.join(', ')} cleared of civilian crowds!`,
+        message: `VIP Perimeter Cleared: Platform ${newlyClearedPlatforms.join(', ')} emptied of civilian crowds!`,
       },
       nowMs,
     );
@@ -2435,6 +2533,69 @@ export function verifyVipCredential(
   };
 }
 
+export function verifySecurityClearance(
+  simState: StationSimState,
+  ops: StationOperationsState,
+  nowMs = Date.now(),
+): {
+  accepted: boolean;
+  completed: boolean;
+  simState: StationSimState;
+  opsState: StationOperationsState;
+  announcement: string | null;
+} {
+  const proto = ops.vipProtocol;
+  if (!proto || !proto.active) {
+    return { accepted: false, completed: false, simState, opsState: ops, announcement: null };
+  }
+
+  const reqPlatforms =
+    proto.designatedPlatforms.length > 0 ? proto.designatedPlatforms : proto.lockedPlatforms;
+  const unsecured = reqPlatforms.filter((p) => !proto.lockedPlatforms.includes(p));
+  const uncleared = reqPlatforms.filter((p) => !proto.clearedPlatforms.includes(p));
+  const pendingCreds = proto.credentials.filter((c) => c.status === 'pending');
+
+  if (unsecured.length > 0 || uncleared.length > 0 || pendingCreds.length > 0) {
+    const missing: string[] = [];
+    if (unsecured.length > 0) missing.push(`Secure P${unsecured.join('/P')} in Train Dashboard`);
+    if (uncleared.length > 0) missing.push(`Clear P${uncleared.join('/P')} crowds`);
+    if (pendingCreds.length > 0) missing.push(`Verify ${pendingCreds.length} delegate badge(s)`);
+    const blockedSim = applyXpAndRewards(
+      simState,
+      { message: `Clearance Hold: ${missing.join(' · ')} before verifying security clearance!` },
+      nowMs,
+    );
+    return {
+      accepted: false,
+      completed: false,
+      simState: blockedSim,
+      opsState: ops,
+      announcement: null,
+    };
+  }
+
+  const nextOps: StationOperationsState = {
+    ...ops,
+    vipProtocol: {
+      ...proto,
+      securityClearanceVerified: true,
+    },
+  };
+  const nextSim = applyXpAndRewards(
+    simState,
+    { xpDelta: 20, message: `Control Room Security Clearance verified for ${proto.codename}!` },
+    nowMs,
+  );
+  const finalized = tryFinalizeVipProtocol(nextSim, nextOps, nowMs);
+  return {
+    accepted: true,
+    completed: finalized.completed,
+    simState: finalized.simState,
+    opsState: finalized.opsState,
+    announcement: finalized.announcement,
+  };
+}
+
 export function tryFinalizeVipProtocol(
   simState: StationSimState,
   ops: StationOperationsState,
@@ -2450,11 +2611,17 @@ export function tryFinalizeVipProtocol(
     return { completed: false, simState, opsState: ops, announcement: null };
   }
 
-  const allPlatformsCleared = proto.lockedPlatforms.every((p) =>
-    proto.clearedPlatforms.includes(p),
-  );
+  const reqPlatforms =
+    proto.designatedPlatforms.length > 0 ? proto.designatedPlatforms : proto.lockedPlatforms;
+  const allPlatformsSecured = reqPlatforms.every((p) => proto.lockedPlatforms.includes(p));
+  const allPlatformsCleared = reqPlatforms.every((p) => proto.clearedPlatforms.includes(p));
   const allCredentialsChecked = proto.credentials.every((c) => c.status !== 'pending');
-  if (!allPlatformsCleared || !allCredentialsChecked) {
+  if (
+    !allPlatformsSecured ||
+    !allPlatformsCleared ||
+    !allCredentialsChecked ||
+    !proto.securityClearanceVerified
+  ) {
     return { completed: false, simState, opsState: ops, announcement: null };
   }
 
@@ -2464,6 +2631,8 @@ export function tryFinalizeVipProtocol(
     ...proto,
     active: false,
     completed: true,
+    lockedPlatforms: [],
+    securedPlatforms: [],
     corridorEvacuationPct: 100,
   };
 
@@ -2484,7 +2653,7 @@ export function tryFinalizeVipProtocol(
       moneyDelta: rewardMoney,
       xpDelta: 90,
       repDelta: 6,
-      message: `${proto.codename} Complete! VIP platforms cleared & all credentials verified (+${rewardMoney}c, +90 XP, +6% Rep)!`,
+      message: `${proto.codename} Complete! Security Clearance verified (+${rewardMoney}c, +90 XP, +6% Rep)! Platform locks released.`,
     },
     nowMs,
   );
@@ -2504,6 +2673,6 @@ export function tryFinalizeVipProtocol(
     simState: finalSim,
     opsState: nextOps,
     announcement:
-      'ভিআইপি নিরাপত্তা প্রোটোকল সফলভাবে সম্পন্ন হয়েছে! সকল প্ল্যাটফর্মে স্বাভাবিক যাত্রী চলাচল শুরু হয়েছে।',
+      'ভিআইপি নিরাপত্তা ক্লিয়ারেন্স যাচাই সম্পন্ন হয়েছে! সকল প্ল্যাটফর্মে স্বাভাবিক ট্রেন চলাচল শুরু হয়েছে।',
   };
 }

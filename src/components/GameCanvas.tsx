@@ -17,6 +17,7 @@ import {
 } from '../game/chapters';
 import { createFirstPersonArms } from '../game/models';
 import {
+  applyVipPassengerDensityAdjustment,
   broadcastMissionBanglaPa,
   buildEmergencyDashboardSnapshot,
   dispatchOfficerToMission,
@@ -55,9 +56,11 @@ import {
   spawnOpsEmergency,
   stepStationOperations,
   syncVipPlatformOccupancy,
+  toggleVipPlatformLock,
   trainStaffMember,
   triggerEmergencyVipSecurity,
   upgradeFacility,
+  verifySecurityClearance,
   verifyVipCredential,
 } from '../game/stationOperations';
 import {
@@ -766,6 +769,9 @@ export function GameCanvas({
         track2Occupancy: ts.track2Occupancy,
         trains: ts.trains,
         alerts: ts.alerts,
+        vipLockedPlatforms: opsStateRef.current.vipProtocol?.active
+          ? opsStateRef.current.vipProtocol.lockedPlatforms
+          : [],
       });
     }
     pushDashboardRef.current = pushDashboardSnapshot;
@@ -940,7 +946,7 @@ export function GameCanvas({
         .map((t) => `${getTrackSignal(s, t)}:${trackOccupied[t] ? 1 : 0}`)
         .join(',');
       const vipSig = o.vipProtocol?.active
-        ? `${o.vipProtocol.eventId}:${o.vipProtocol.corridorEvacuationPct}:${o.vipProtocol.clearedPlatforms.join(',')}:${Math.ceil(o.vipProtocol.timeRemainingSec)}`
+        ? `${o.vipProtocol.eventId}:${o.vipProtocol.lockedPlatforms.join(',')}:${o.vipProtocol.corridorEvacuationPct}:${o.vipProtocol.clearedPlatforms.join(',')}:${o.vipProtocol.securityClearanceVerified ? 1 : 0}:${Math.ceil(o.vipProtocol.timeRemainingSec)}`
         : '0';
       const sig = `${activeId}|${multiStateRef.current.chapter2Unlocked}|${multiStateRef.current.celebrationDismissed}|${s.dayNumber}|${s.stationLevel}|${s.unlockedTracks}|${upgradeEval.canUpgradeNow}|${s.level}|${s.xp}|${s.money}|${s.reputation}|${s.satisfaction}|${s.securityRating}|${s.crimesPrevented}|${s.emergenciesResolved}|${s.complaints}|${s.successfulInteractions}|${npcSt.npcs.length}|${npcSt.missions.length}|${o.activeOpsEvents.length}|${o.powerOutageActive}|${vipSig}|${taskSig}|${missionSig}|${trainSig}|${availableOfficersCount}|${incId}|${timeStr}|${trackSig}|${ts.switchPosition}|${s.crossingGateClosed}|${urgentCount}|${ts.alerts.length}|${prompt?.id ?? ''}|${prompt?.title ?? ''}|${s.lastEventTimestamp}`;
       if (!force && sig === lastHudSig && now - lastHudPushTime < 450) {
@@ -993,7 +999,11 @@ export function GameCanvas({
         powerOutageActive: o.powerOutageActive,
         paSystemFailed: o.paSystemFailed,
         vipSecurityActive: Boolean(o.vipProtocol?.active),
-        vipLockedPlatforms: o.vipProtocol?.active ? o.vipProtocol.lockedPlatforms : [],
+        vipLockedPlatforms: o.vipProtocol?.active
+          ? o.vipProtocol.lockedPlatforms.length > 0
+            ? o.vipProtocol.lockedPlatforms
+            : o.vipProtocol.designatedPlatforms
+          : [],
         availableOfficersCount,
         timeFormatted: timeStr,
         dayPeriodLabel: getDayPeriodLabel(s.gameMinutes),
@@ -1031,6 +1041,11 @@ export function GameCanvas({
       pushOperationsSnapshot(true);
     };
 
+    const getActiveVipLockedPlatforms = (): readonly TrackId[] =>
+      opsStateRef.current.vipProtocol?.active
+        ? opsStateRef.current.vipProtocol.lockedPlatforms
+        : [];
+
     // Wire imperative Train Control Dashboard callbacks directly into simulation refs
     trainActionsRef.current = {
       assignPlatform: (trainId: string, platform: TrackId) => {
@@ -1040,6 +1055,7 @@ export function GameCanvas({
           trainId,
           platform,
           performance.now(),
+          getActiveVipLockedPlatforms(),
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
@@ -1319,6 +1335,7 @@ export function GameCanvas({
           trainId,
           track,
           performance.now(),
+          getActiveVipLockedPlatforms(),
         );
         simStateRef.current = res.simState;
         trainStateRef.current = res.trainState;
@@ -1413,9 +1430,41 @@ export function GameCanvas({
         );
         simStateRef.current = res.simState;
         opsStateRef.current = res.opsState;
-        if (res.accepted) {
+        if (res.accepted && res.protocol) {
+          applyVipPassengerDensityAdjustment(
+            world.getNpcState(),
+            res.protocol,
+            simStateRef.current.unlockedTracks,
+          );
           sound.playEmergencySiren();
           sound.playRadioChirp();
+          playGuardedAnnouncement(res.announcement);
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
+        }
+        pushAllSnapshots();
+      },
+      toggleSecurePlatform: (platformId: TrackId) => {
+        const res = toggleVipPlatformLock(
+          simStateRef.current,
+          opsStateRef.current,
+          platformId,
+          performance.now(),
+        );
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.accepted) {
+          if (res.locked && opsStateRef.current.vipProtocol) {
+            applyVipPassengerDensityAdjustment(
+              world.getNpcState(),
+              opsStateRef.current.vipProtocol,
+              simStateRef.current.unlockedTracks,
+            );
+            sound.playPoliceWhistle();
+          } else {
+            sound.playSignalLever();
+          }
           playGuardedAnnouncement(res.announcement);
           persistCurrentShift();
         } else {
@@ -1464,6 +1513,26 @@ export function GameCanvas({
           persistCurrentShift();
         } else {
           sound.playEmergencySiren();
+        }
+        pushAllSnapshots();
+      },
+      verifySecurityClearance: () => {
+        const res = verifySecurityClearance(
+          simStateRef.current,
+          opsStateRef.current,
+          performance.now(),
+        );
+        simStateRef.current = res.simState;
+        opsStateRef.current = res.opsState;
+        if (res.completed) {
+          sound.playAchievementUnlock();
+          playGuardedAnnouncement(res.announcement);
+          persistCurrentShift();
+        } else if (res.accepted) {
+          sound.playRadioChirp();
+          persistCurrentShift();
+        } else {
+          sound.playSignalLever();
         }
         pushAllSnapshots();
       },
@@ -2047,6 +2116,7 @@ export function GameCanvas({
         trainStateRef.current,
         dt,
         performance.now(),
+        getActiveVipLockedPlatforms(),
       );
       simStateRef.current = trainStep.simState;
       trainStateRef.current = trainStep.trainState;

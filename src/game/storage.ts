@@ -12,7 +12,9 @@ import type {
   AudioSettings,
   CameraMode,
   ChapterId,
+  StationOperationsState,
   StationSimState,
+  TrackId,
   TrainSimulationState,
   WeatherMode,
 } from './types';
@@ -153,6 +155,27 @@ export function parseMultiShiftData(raw: string | null | undefined): SavedMultiS
       ch2Sim.gameMinutes,
     );
 
+    const hydrateVipProtocol = (
+      rawVip: StationOperationsState['vipProtocol'] | null | undefined,
+    ): StationOperationsState['vipProtocol'] => {
+      if (!rawVip) return null;
+      const locked = Array.isArray(rawVip.lockedPlatforms) ? rawVip.lockedPlatforms : [];
+      const designated: TrackId[] =
+        Array.isArray(rawVip.designatedPlatforms) && rawVip.designatedPlatforms.length > 0
+          ? rawVip.designatedPlatforms
+          : locked.length > 0
+            ? locked
+            : ([1] as TrackId[]);
+      return {
+        ...rawVip,
+        designatedPlatforms: designated,
+        securedPlatforms: Array.isArray(rawVip.securedPlatforms) ? rawVip.securedPlatforms : locked,
+        lockedPlatforms: locked,
+        platformDensityTargets: rawVip.platformDensityTargets ?? {},
+        securityClearanceVerified: Boolean(rawVip.securityClearanceVerified),
+      };
+    };
+
     const baseOps1 = createInitialOperationsState(1);
     const ch1Ops = {
       ...baseOps1,
@@ -163,7 +186,7 @@ export function parseMultiShiftData(raw: string | null | undefined): SavedMultiS
         ? rawM.chapter1.opsState.facilities
         : baseOps1.facilities,
       finance: { ...baseOps1.finance, ...(rawM.chapter1.opsState?.finance ?? {}) },
-      vipProtocol: rawM.chapter1.opsState?.vipProtocol ?? null,
+      vipProtocol: hydrateVipProtocol(rawM.chapter1.opsState?.vipProtocol),
     };
 
     const baseOps2 = createInitialOperationsState(2);
@@ -176,7 +199,7 @@ export function parseMultiShiftData(raw: string | null | undefined): SavedMultiS
         ? rawM.chapter2.opsState.facilities
         : baseOps2.facilities,
       finance: { ...baseOps2.finance, ...(rawM.chapter2.opsState?.finance ?? {}) },
-      vipProtocol: rawM.chapter2.opsState?.vipProtocol ?? null,
+      vipProtocol: hydrateVipProtocol(rawM.chapter2.opsState?.vipProtocol),
     };
 
     const unlockEval = evaluateChapterUnlockStatus(ch1Sim, ch1Ops, Boolean(rawM.celebrationDismissed));

@@ -248,13 +248,24 @@ export function stepBackgroundStation(
   const maxTracks = runtime.chapterId === 2 ? 8 : 6;
   const unlocked = Math.max(2, Math.min(maxTracks, sim.unlockedTracks || 2));
 
+  const vipLockedPlatforms: readonly TrackId[] = ops.vipProtocol?.active
+    ? ops.vipProtocol.lockedPlatforms
+    : [];
+
   for (const t of trainState.trains) {
     if ((t.status === 'Approaching' || t.status === 'Delayed') && t.assignedPlatform === null) {
       // Find a free platform track
       for (let trackNum = 1; trackNum <= unlocked; trackNum++) {
         const trackId = trackNum as TrackId;
-        if (!trainState.trackOccupancies[trackId]?.occupied) {
-          const assigned = assignTrainPlatform(sim, trainState, t.id, trackId, nowMs);
+        if (!trainState.trackOccupancies[trackId]?.occupied && !vipLockedPlatforms.includes(trackId)) {
+          const assigned = assignTrainPlatform(
+            sim,
+            trainState,
+            t.id,
+            trackId,
+            nowMs,
+            vipLockedPlatforms,
+          );
           if (assigned.accepted) {
             sim = assigned.simState;
             trainState = assigned.trainState;
@@ -290,7 +301,7 @@ export function stepBackgroundStation(
     }
   }
 
-  const stepped = stepTrainSimulation(sim, trainState, safeDt, nowMs);
+  const stepped = stepTrainSimulation(sim, trainState, safeDt, nowMs, vipLockedPlatforms);
   sim = stepped.simState;
   trainState = stepped.trainState;
 

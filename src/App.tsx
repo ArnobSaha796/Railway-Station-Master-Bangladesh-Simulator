@@ -205,6 +205,7 @@ function createInitialDashboard(): TrainDashboardSnapshot {
     track2Occupancy: ts.track2Occupancy,
     trains: ts.trains,
     alerts: ts.alerts,
+    vipLockedPlatforms: [],
   };
 }
 
@@ -290,8 +291,10 @@ const NOOP_OPS_ACTIONS: StationOperationsCallbacks = {
   upgradeFacility: () => {},
   repairFacility: () => {},
   triggerVipSecurity: () => {},
+  toggleSecurePlatform: () => {},
   clearVipPlatform: () => {},
   verifyVipCredential: () => {},
+  verifySecurityClearance: () => {},
 };
 
 const NOOP_CHAPTER_ACTIONS: ChapterSwitchActions = {

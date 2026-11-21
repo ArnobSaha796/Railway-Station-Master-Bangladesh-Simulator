@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { BallastVariant } from './trackDecor';
 import type { TrackId } from './types';
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -172,32 +173,248 @@ export function createGrassTexture(maxAnisotropy = 4): THREE.CanvasTexture {
   return configureColorTexture(new THREE.CanvasTexture(canvas), 28, 28, maxAnisotropy);
 }
 
+export function createBallastVariantTexturePair(
+  variant: BallastVariant,
+  repeatX = 16,
+  maxAnisotropy = 4,
+): {
+  map: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const [cColor, ctxC] = makeCanvas(512, 512);
+  const [cBump, ctxB] = makeCanvas(512, 512);
+
+  const variantConfigs: Record<
+    BallastVariant,
+    {
+      base: string;
+      tones: string[];
+      centerBand: [string, string, string];
+      speckCount: number;
+      mossRatio: number;
+      oilPatches: number;
+    }
+  > = {
+    mainline: {
+      base: '#66635e',
+      tones: ['#8a867f', '#52504c', '#9e9a92', '#42403d', '#77726a', '#acabaa'],
+      centerBand: ['rgba(72, 70, 66, 0.22)', 'rgba(98, 76, 56, 0.22)', 'rgba(56, 48, 40, 0.28)'],
+      speckCount: 5400,
+      mossRatio: 0,
+      oilPatches: 0,
+    },
+    station_oiled: {
+      base: '#443e38',
+      tones: ['#575049', '#322d29', '#675a4e', '#23201d', '#7c4e32', '#433f3b'],
+      centerBand: ['rgba(42, 38, 34, 0.36)', 'rgba(116, 58, 28, 0.36)', 'rgba(18, 15, 13, 0.62)'],
+      speckCount: 5800,
+      mossRatio: 0,
+      oilPatches: 18,
+    },
+    siding_weathered: {
+      base: '#6c624e',
+      tones: ['#8c8067', '#5a5242', '#a19578', '#4d5d38', '#756a52', '#5f6f42'],
+      centerBand: ['rgba(76, 94, 48, 0.38)', 'rgba(108, 86, 58, 0.26)', 'rgba(62, 56, 44, 0.28)'],
+      speckCount: 5200,
+      mossRatio: 7,
+      oilPatches: 3,
+    },
+    iron_dust: {
+      base: '#6c4d3c',
+      tones: ['#945d40', '#5b4235', '#ad6f4d', '#47342a', '#826b5c', '#7c472d'],
+      centerBand: ['rgba(86, 54, 38, 0.3)', 'rgba(148, 68, 30, 0.42)', 'rgba(84, 42, 24, 0.46)'],
+      speckCount: 5600,
+      mossRatio: 0,
+      oilPatches: 6,
+    },
+  };
+
+  const cfg = variantConfigs[variant];
+  ctxC.fillStyle = cfg.base;
+  ctxC.fillRect(0, 0, 512, 512);
+  ctxB.fillStyle = '#686868';
+  ctxB.fillRect(0, 0, 512, 512);
+
+  const railBandGrad = ctxC.createLinearGradient(0, 0, 0, 512);
+  railBandGrad.addColorStop(0.0, cfg.centerBand[0]);
+  railBandGrad.addColorStop(0.28, cfg.centerBand[1]);
+  railBandGrad.addColorStop(0.5, cfg.centerBand[2]);
+  railBandGrad.addColorStop(0.72, cfg.centerBand[1]);
+  railBandGrad.addColorStop(1.0, cfg.centerBand[0]);
+  ctxC.fillStyle = railBandGrad;
+  ctxC.fillRect(0, 0, 512, 512);
+
+  if (cfg.mossRatio > 0) {
+    ctxC.fillStyle = 'rgba(72, 108, 42, 0.28)';
+    for (let m = 0; m < 52; m++) {
+      const mx = (m * 97) % 512;
+      const my = m % 2 === 0 ? (m * 17) % 96 : 416 + ((m * 19) % 88);
+      ctxC.fillRect(mx, my, 20 + (m % 24), 12 + (m % 14));
+    }
+  }
+  if (cfg.oilPatches > 0) {
+    for (let o = 0; o < cfg.oilPatches; o++) {
+      const ox = (o * 113 + 37) % 512;
+      const oy = 178 + ((o * 53) % 156);
+      ctxC.fillStyle = o % 3 === 0 ? 'rgba(104, 48, 20, 0.3)' : 'rgba(18, 16, 14, 0.34)';
+      ctxC.beginPath();
+      ctxC.ellipse(ox, oy, 24 + (o % 20), 11 + (o % 10), 0, 0, Math.PI * 2);
+      ctxC.fill();
+    }
+  }
+
+  const bTones = ['#dedede', '#444444', '#f2f2f2', '#303030', '#b2b2b2', '#fafafa'];
+  const seedShift = variant.length * 37;
+  for (let i = 0; i < cfg.speckCount; i++) {
+    const x = ((i + seedShift) * 73 + (i % 13) * 19) % 512;
+    const y = ((i + seedShift) * 139 + (i % 11) * 23) % 512;
+    const w = 4 + (i % 6);
+    const h = 4 + ((i * 3) % 5);
+    if (cfg.mossRatio > 0 && i % cfg.mossRatio === 0 && (y < 105 || y > 407)) {
+      ctxC.fillStyle = i % 2 === 0 ? '#527a34' : '#6c8740';
+    } else {
+      ctxC.fillStyle = cfg.tones[i % cfg.tones.length];
+    }
+    ctxC.fillRect(x, y, w, h);
+    ctxB.fillStyle = bTones[i % bTones.length];
+    ctxB.fillRect(x, y, w, h);
+  }
+
+  return {
+    map: configureColorTexture(new THREE.CanvasTexture(cColor), repeatX, 1, maxAnisotropy),
+    bumpMap: configureDataTexture(new THREE.CanvasTexture(cBump), repeatX, 1, maxAnisotropy),
+  };
+}
+
 export function createBallastTexturePair(maxAnisotropy = 4): {
   map: THREE.CanvasTexture;
   bumpMap: THREE.CanvasTexture;
 } {
-  const [cColor, ctxC] = makeCanvas(256, 256);
-  const [cBump, ctxB] = makeCanvas(256, 256);
-  ctxC.fillStyle = '#68655f';
-  ctxC.fillRect(0, 0, 256, 256);
-  ctxB.fillStyle = '#707070';
-  ctxB.fillRect(0, 0, 256, 256);
+  return createBallastVariantTexturePair('mainline', 48, maxAnisotropy);
+}
 
-  for (let i = 0; i < 1800; i++) {
-    const x = (i * 53) % 256;
-    const y = (i * 97) % 256;
-    const tones = ['#858077', '#55524d', '#989288', '#44413c'];
-    const bTones = ['#d0d0d0', '#505050', '#ececec', '#3a3a3a'];
-    ctxC.fillStyle = tones[i % tones.length];
-    ctxC.fillRect(x, y, 3, 3);
-    ctxB.fillStyle = bTones[i % bTones.length];
-    ctxB.fillRect(x, y, 3, 3);
+export function createSleeperTexturePair(maxAnisotropy = 4): {
+  map: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const [cColor, ctxC] = makeCanvas(256, 512);
+  const [cBump, ctxB] = makeCanvas(256, 512);
+
+  // Neutral-warm weathered timber base so instanceColor multiplies cleanly
+  ctxC.fillStyle = '#d4c8ba';
+  ctxC.fillRect(0, 0, 256, 512);
+  ctxB.fillStyle = '#888888';
+  ctxB.fillRect(0, 0, 256, 512);
+
+  // Longitudinal wood-grain fibers & deeper weather-checked splits
+  for (let i = 0; i < 460; i++) {
+    const x = (i * 19 + (i % 7) * 5) % 256;
+    const y = (i * 43) % 512;
+    const h = 40 + (i % 96);
+    const w = i % 8 === 0 ? 5 : 2;
+    ctxC.fillStyle =
+      i % 5 === 0
+        ? 'rgba(46, 32, 22, 0.44)'
+        : i % 5 === 1
+          ? 'rgba(242, 232, 218, 0.26)'
+          : 'rgba(92, 70, 52, 0.3)';
+    ctxC.fillRect(x, y, w, h);
+
+    ctxB.fillStyle = i % 5 === 0 ? '#2e2e2e' : '#c0c0c0';
+    ctxB.fillRect(x, y, w, h);
   }
 
+  // Heavy corroded rail-seat iron oxide rust stains & oxidized tie-plate scars around v ~ 0.20 & 0.80
+  [102, 410].forEach((seatY) => {
+    const rustGrad = ctxC.createLinearGradient(0, seatY - 64, 0, seatY + 64);
+    rustGrad.addColorStop(0, 'rgba(155, 68, 28, 0.0)');
+    rustGrad.addColorStop(0.32, 'rgba(162, 70, 30, 0.56)');
+    rustGrad.addColorStop(0.5, 'rgba(116, 44, 22, 0.78)');
+    rustGrad.addColorStop(0.68, 'rgba(162, 70, 30, 0.56)');
+    rustGrad.addColorStop(1, 'rgba(155, 68, 28, 0.0)');
+    ctxC.fillStyle = rustGrad;
+    ctxC.fillRect(0, seatY - 64, 256, 128);
+
+    ctxC.fillStyle = 'rgba(110, 42, 20, 0.55)';
+    ctxC.fillRect(22, seatY - 24, 212, 48);
+
+    ctxB.fillStyle = '#383838';
+    ctxB.fillRect(22, seatY - 26, 212, 52);
+  });
+
   return {
-    map: configureColorTexture(new THREE.CanvasTexture(cColor), 40, 2, maxAnisotropy),
-    bumpMap: configureDataTexture(new THREE.CanvasTexture(cBump), 40, 2, maxAnisotropy),
+    map: configureColorTexture(new THREE.CanvasTexture(cColor), 1, 1, maxAnisotropy),
+    bumpMap: configureDataTexture(new THREE.CanvasTexture(cBump), 1, 1, maxAnisotropy),
   };
+}
+
+export function createTrackYardGroundTexturePair(maxAnisotropy = 4): {
+  map: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const [cColor, ctxC] = makeCanvas(512, 512);
+  const [cBump, ctxB] = makeCanvas(512, 512);
+
+  // Compacted sub-ballast earth, cinder & limestone screenings
+  ctxC.fillStyle = '#53514a';
+  ctxC.fillRect(0, 0, 512, 512);
+  ctxB.fillStyle = '#7a7a7a';
+  ctxB.fillRect(0, 0, 512, 512);
+
+  // Fine compacted grit & occasional tiny moss/scrub flecks
+  const gritTones = ['#636058', '#46443e', '#6f6b61', '#5a584f', '#4e5b42', '#7a7467'];
+  const bTones = ['#9a9a9a', '#555555', '#b8b8b8', '#707070', '#686868', '#c8c8c8'];
+  for (let i = 0; i < 7200; i++) {
+    const x = (i * 61 + (i % 17) * 11) % 512;
+    const y = (i * 127 + (i % 9) * 29) % 512;
+    const sz = 2 + (i % 4);
+    const toneIdx = i % 19 === 0 ? 4 : i % gritTones.length;
+    ctxC.fillStyle = gritTones[toneIdx];
+    ctxC.fillRect(x, y, sz, sz);
+    ctxB.fillStyle = bTones[i % bTones.length];
+    ctxB.fillRect(x, y, sz, sz);
+  }
+
+  // Subtle longitudinal drainage seam lines
+  ctxC.fillStyle = 'rgba(28, 26, 22, 0.16)';
+  ctxC.fillRect(0, 252, 512, 8);
+  ctxB.fillStyle = '#383838';
+  ctxB.fillRect(0, 252, 512, 8);
+
+  return {
+    map: configureColorTexture(new THREE.CanvasTexture(cColor), 36, 2, maxAnisotropy),
+    bumpMap: configureDataTexture(new THREE.CanvasTexture(cBump), 36, 2, maxAnisotropy),
+  };
+}
+
+export function createMetropolitanGroundTexture(maxAnisotropy = 4): THREE.CanvasTexture {
+  const [canvas, ctx] = makeCanvas(512, 512);
+  ctx.fillStyle = '#5c656f';
+  ctx.fillRect(0, 0, 512, 512);
+
+  for (let i = 0; i < 4200; i++) {
+    const x = (i * 83 + (i % 7) * 19) % 512;
+    const y = (i * 149 + (i % 11) * 13) % 512;
+    ctx.fillStyle =
+      i % 3 === 0 ? 'rgba(255,255,255,0.045)' : i % 3 === 1 ? 'rgba(18,22,28,0.09)' : 'rgba(90,98,86,0.06)';
+    ctx.fillRect(x, y, 3, 3);
+  }
+
+  // Subtle architectural slab joints
+  ctx.strokeStyle = 'rgba(30, 38, 46, 0.22)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i <= 512; i += 128) {
+    ctx.beginPath();
+    ctx.moveTo(i, 0);
+    ctx.lineTo(i, 512);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i);
+    ctx.lineTo(512, i);
+    ctx.stroke();
+  }
+
+  return configureColorTexture(new THREE.CanvasTexture(canvas), 42, 42, maxAnisotropy);
 }
 
 export function createCorrugatedTexture(baseHex: string, maxAnisotropy = 4): THREE.CanvasTexture {
@@ -485,6 +702,39 @@ export function createCityBillboardTexture(
   ctx.fillStyle = accentHex;
   ctx.font = '800 28px "Plus Jakarta Sans", system-ui, sans-serif';
   ctx.fillText(subEn, 64, 166);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = maxAnisotropy;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+export function createKilometerPostTexture(
+  topText: string,
+  bottomText: string,
+  bgHex = '#f5b81c',
+  fgHex = '#171717',
+  maxAnisotropy = 4,
+): THREE.CanvasTexture {
+  const [canvas, ctx] = makeCanvas(256, 256);
+  ctx.fillStyle = bgHex;
+  ctx.fillRect(0, 0, 256, 256);
+
+  ctx.strokeStyle = fgHex;
+  ctx.lineWidth = 14;
+  ctx.strokeRect(10, 10, 236, 236);
+
+  ctx.fillStyle = fgHex;
+  ctx.fillRect(10, 122, 236, 10);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '900 54px "Plus Jakarta Sans", "Noto Sans Bengali", system-ui, sans-serif';
+  ctx.fillText(topText, 128, 70);
+
+  ctx.font = '800 44px "Noto Sans Bengali", "Plus Jakarta Sans", system-ui, sans-serif';
+  ctx.fillText(bottomText, 128, 186);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;

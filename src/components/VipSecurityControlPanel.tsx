@@ -1,18 +1,22 @@
 import {
   BadgeCheck,
   CheckCircle2,
+  Lock,
   ShieldAlert,
   ShieldCheck,
   ShieldX,
   Siren,
+  Unlock,
   Users,
 } from 'lucide-react';
 import type { TrackId, VipSecurityProtocol } from '../game/types';
 
 export interface VipSecurityControlActions {
   triggerVipSecurity: () => void;
+  toggleSecurePlatform: (platformId: TrackId) => void;
   clearVipPlatform: (platformId: TrackId) => void;
   verifyVipCredential: (credentialId: string, decision: 'verify' | 'reject') => void;
+  verifySecurityClearance: () => void;
 }
 
 interface VipSecurityControlPanelProps {
@@ -38,7 +42,7 @@ export function VipSecurityControlPanel({
             <span>Emergency VIP Security Protocol · ভিআইপি নিরাপত্তা ব্যবস্থা</span>
           </div>
           <p className="text-[11px] sm:text-xs text-[#d4c6a3]">
-            Trigger a diplomatic convoy drill that shifts station passenger flow patterns, locks specific platforms for clearing, and opens Control Room credential verification.
+            Trigger a diplomatic security event that adjusts platform passenger density, lets you Secure platforms in the Train Dashboard, and requires Control Room Security Clearance verification.
           </p>
         </div>
 
@@ -55,10 +59,28 @@ export function VipSecurityControlPanel({
     );
   }
 
+  const trackedPlatforms = Array.from(
+    new Set([...(protocol.designatedPlatforms ?? []), ...protocol.lockedPlatforms]),
+  );
+  const reqPlatforms =
+    protocol.designatedPlatforms && protocol.designatedPlatforms.length > 0
+      ? protocol.designatedPlatforms
+      : protocol.lockedPlatforms;
   const pendingCreds = protocol.credentials.filter((c) => c.status === 'pending').length;
-  const remainingPlatforms = protocol.lockedPlatforms.filter(
+  const unsecuredPlatforms = reqPlatforms.filter((p) => !protocol.lockedPlatforms.includes(p));
+  const remainingPlatforms = reqPlatforms.filter(
     (p) => !protocol.clearedPlatforms.includes(p),
   ).length;
+  const allPlatformsSecured = unsecuredPlatforms.length === 0 && reqPlatforms.length > 0;
+  const allPlatformsCleared = remainingPlatforms === 0 && reqPlatforms.length > 0;
+  const allCredentialsChecked = pendingCreds === 0;
+  const readyForFinalClearance =
+    allPlatformsSecured && allPlatformsCleared && allCredentialsChecked;
+
+  const densityEntries = Object.entries(protocol.platformDensityTargets ?? {}) as [
+    string,
+    'cleared' | 'elevated' | 'normal',
+  ][];
 
   return (
     <div
@@ -84,6 +106,28 @@ export function VipSecurityControlPanel({
           {!compact && (
             <p className="text-[11px] text-[#dfd5bc]">{protocol.flowPatternDescription}</p>
           )}
+          {densityEntries.length > 0 && (
+            <div
+              data-testid="vip-density-targets"
+              className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[10px] font-mono-tabular"
+            >
+              <span className="text-[#cbbd98] uppercase font-bold">Density Shift:</span>
+              {densityEntries.map(([tId, mode]) => (
+                <span
+                  key={tId}
+                  className={`px-1.5 py-0.5 rounded border font-bold ${
+                    mode === 'cleared'
+                      ? 'bg-[#3f1616] border-[#ef4444]/60 text-[#fecaca]'
+                      : mode === 'elevated'
+                        ? 'bg-[#3b290a] border-[#f59e0b]/60 text-[#fde68a]'
+                        : 'bg-[#122e20] border-[#4ade80]/40 text-[#bbf7d0]'
+                  }`}
+                >
+                  P{tId}: {mode === 'cleared' ? 'VIP CLEAR' : mode === 'elevated' ? 'ELEVATED' : 'NORMAL'}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="text-right font-mono-tabular shrink-0">
@@ -96,20 +140,24 @@ export function VipSecurityControlPanel({
         </div>
       </div>
 
-      {/* Step 1: Specific Platform Clearing */}
+      {/* Step 1: Secure & Clear Designated Platforms */}
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="font-bold uppercase tracking-wider text-[#f5c756] flex items-center gap-1.5">
             <Users className="w-3.5 h-3.5" />
-            <span>Step 1 · Clear Specific Platform Corridor ({remainingPlatforms} left)</span>
+            <span>
+              Step 1 · Secure &amp; Clear VIP Platforms ({unsecuredPlatforms.length} to secure ·{' '}
+              {remainingPlatforms} to clear)
+            </span>
           </span>
           <span className="text-[11px] text-[#cbbd98]">
-            Order platform clear sweep until civilians exit cordoned platforms
+            Click a platform in Track Schematic above or here to lock arrivals, then sweep crowds
           </span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {protocol.lockedPlatforms.map((platId) => {
+          {trackedPlatforms.map((platId) => {
+            const isLocked = protocol.lockedPlatforms.includes(platId);
             const isCleared = protocol.clearedPlatforms.includes(platId);
             const isSweeping = protocol.sweepOrderedPlatforms.includes(platId);
             const count = protocol.platformPassengerCounts[platId] ?? 0;
@@ -118,17 +166,24 @@ export function VipSecurityControlPanel({
               <div
                 key={platId}
                 data-testid={`vip-platform-row-${platId}`}
-                className={`rounded-lg border px-3 py-2 flex items-center justify-between gap-2 ${
-                  isCleared
+                className={`rounded-lg border px-3 py-2 flex flex-wrap items-center justify-between gap-2 ${
+                  isLocked && isCleared
                     ? 'bg-[#103020] border-[#4ade80]/60'
-                    : isSweeping
+                    : isLocked || isSweeping
                       ? 'bg-[#33270d] border-[#f59e0b]/60'
                       : 'bg-[#2a1414] border-[#ef4444]/60'
                 }`}
               >
-                <div className="text-xs">
-                  <div className="font-bold text-[#fbf4e2]">
-                    Platform {platId} Security Cordon
+                <div className="text-xs min-w-0">
+                  <div className="font-bold text-[#fbf4e2] flex items-center gap-1.5">
+                    <span>Platform {platId} Security Cordon</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                        isLocked ? 'bg-[#991b1b] text-[#fecaca]' : 'bg-[#3f2c0d] text-[#fde68a]'
+                      }`}
+                    >
+                      {isLocked ? 'SECURED' : 'UNLOCKED'}
+                    </span>
                   </div>
                   <div className="font-mono-tabular text-[11px] text-[#dfd5bc]">
                     {isCleared
@@ -139,21 +194,37 @@ export function VipSecurityControlPanel({
                   </div>
                 </div>
 
-                {isCleared ? (
-                  <span className="px-2.5 py-1 rounded bg-[#16a34a] text-white text-[11px] font-bold flex items-center gap-1 shrink-0">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    CLEARED
-                  </span>
-                ) : (
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
-                    data-testid={`vip-clear-platform-${platId}`}
-                    onClick={() => actions.clearVipPlatform(platId)}
-                    className="px-3 py-1.5 rounded-lg bg-[#e8b84b] hover:bg-[#f2c65e] text-[#14241b] text-xs font-bold cursor-pointer shrink-0"
+                    data-testid={`vip-panel-secure-${platId}`}
+                    onClick={() => actions.toggleSecurePlatform(platId)}
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border flex items-center gap-1 cursor-pointer ${
+                      isLocked
+                        ? 'bg-[#7f1d1d] hover:bg-[#991b1b] border-[#f87171] text-[#fee2e2]'
+                        : 'bg-[#163827] hover:bg-[#1f4d36] border-[#e8b84b]/50 text-[#fde68a]'
+                    }`}
                   >
-                    {isSweeping ? `Re-Broadcast P${platId} Clear` : `Clear Platform P${platId}`}
+                    {isLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                    <span>{isLocked ? 'Secured' : 'Secure'}</span>
                   </button>
-                )}
+
+                  {isCleared ? (
+                    <span className="px-2.5 py-1 rounded bg-[#16a34a] text-white text-[11px] font-bold flex items-center gap-1 shrink-0">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      CLEARED
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid={`vip-clear-platform-${platId}`}
+                      onClick={() => actions.clearVipPlatform(platId)}
+                      className="px-3 py-1.5 rounded-lg bg-[#e8b84b] hover:bg-[#f2c65e] text-[#14241b] text-xs font-bold cursor-pointer shrink-0"
+                    >
+                      {isSweeping ? `Re-Sweep P${platId}` : `Clear P${platId}`}
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -165,7 +236,7 @@ export function VipSecurityControlPanel({
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="font-bold uppercase tracking-wider text-[#f5c756] flex items-center gap-1.5">
             <BadgeCheck className="w-3.5 h-3.5" />
-            <span>Step 2 · Verify VIP Delegation Credentials ({pendingCreds} pending)</span>
+            <span>Step 2 · Audit VIP Delegation Credentials ({pendingCreds} pending)</span>
           </span>
           <span className="font-mono-tabular text-[11px] text-[#7dd3fc]">
             Control Room Manifest Prefix: {protocol.expectedManifestPrefix}-XXX · Check Code vs Manifest!
@@ -248,6 +319,42 @@ export function VipSecurityControlPanel({
           })}
         </div>
       </div>
+
+      {/* Step 3: Control Room Final Security Clearance Verification */}
+      <div className="pt-2 border-t border-[#f59e0b]/25 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+        <div className="space-y-1 text-xs">
+          <div className="font-bold uppercase tracking-wider text-[#f5c756] flex items-center gap-1.5">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Step 3 · Control Room Security Clearance Authorization</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono-tabular">
+            <span className={allPlatformsSecured ? 'text-[#86efac] font-semibold' : 'text-[#fca5a5]'}>
+              {allPlatformsSecured ? '✓' : '○'} Platforms Secured
+            </span>
+            <span className={allPlatformsCleared ? 'text-[#86efac] font-semibold' : 'text-[#fca5a5]'}>
+              {allPlatformsCleared ? '✓' : '○'} Crowds Cleared
+            </span>
+            <span className={allCredentialsChecked ? 'text-[#86efac] font-semibold' : 'text-[#fca5a5]'}>
+              {allCredentialsChecked ? '✓' : '○'} Badges Audited
+            </span>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          data-testid="verify-security-clearance-btn"
+          onClick={actions.verifySecurityClearance}
+          className={`min-h-[38px] px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shrink-0 border transition-colors ${
+            readyForFinalClearance
+              ? 'bg-[#16a34a] hover:bg-[#15803d] border-[#86efac]/60 text-white shadow-md'
+              : 'bg-[#2a2414] hover:bg-[#3a311a] border-[#f59e0b]/40 text-[#fde68a]'
+          }`}
+        >
+          <ShieldCheck className="w-4 h-4" />
+          <span>Verify Security Clearance</span>
+        </button>
+      </div>
     </div>
   );
 }
+

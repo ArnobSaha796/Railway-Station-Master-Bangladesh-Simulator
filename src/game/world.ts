@@ -1,19 +1,27 @@
 import * as THREE from 'three';
 import {
+  createBananaClump,
   createCommercialPlaza,
   createConstructionCrane,
   createDigitalBillboard,
+  createDiscardedRustedSleeperCluster,
+  createDwarfShuntSignal,
   createElevatedFlyover,
   createEmergencyHazardProp,
   createExtendedFootbridgeSection,
   createFoodStall,
   createFootoverBridge,
   createInfoBoard,
+  createKilometerMarkerPost,
   createLevelCrossing,
   createModernSkyscraper,
+  createOvergrownWeedClusterGeometry,
   createRailwaySwitchVisual,
+  createRelayEquipmentCabinet,
+  createReserveSleeperStack,
   createRickshaw,
   createSemaphoreSignal,
+  createSignalGantryBridge,
   createSouthTerminalBuilding,
   createStationBench,
   createStationMasterCharacter,
@@ -25,6 +33,7 @@ import {
   createUpgradeKiosk,
   createUrbanVehicle,
   createWaitingRoomPavilion,
+  createYardFloodlightMast,
   createCoconutPalm,
   type CharacterRig,
   type ConstructionCraneRig,
@@ -48,13 +57,24 @@ import {
 } from './npcModels';
 import {
   createAsphaltAvenueTexture,
-  createBallastTexturePair,
+  createBallastVariantTexturePair,
   createGlassFacadeTexture,
   createGrassTexture,
+  createMetropolitanGroundTexture,
   createPlatformSignTexture,
   createPlatformTileTexturePair,
   createSignboardTexture,
+  createSleeperTexturePair,
+  createTrackYardGroundTexturePair,
 } from './textures';
+import {
+  computeSleeperInstanceProps,
+  generateTrackEdgeWeedPlacements,
+  generateTrackShoulderCobbles,
+  getDiscardedSleeperPlacements,
+  getTrackBallastSegments,
+  type BallastVariant,
+} from './trackDecor';
 import { FOOTBRIDGE_HEIGHT, groundHeightAt, PLATFORM_HEIGHT } from './physics';
 import {
   CHAPTER2_STATION_NAME_BN,
@@ -285,7 +305,12 @@ export function buildStationWorld(
   const interactables: InteractablePoint[] = [];
 
   // 1. Modern Metropolitan Ground Deck + Landscaped Green Medians + Paved City Plazas
-  const urbanConcreteMat = new THREE.MeshStandardMaterial({ color: 0x626b75, roughness: 0.88 });
+  const metroGroundTex = createMetropolitanGroundTexture(maxAnisotropy);
+  const urbanConcreteMat = new THREE.MeshStandardMaterial({
+    map: metroGroundTex,
+    color: 0xffffff,
+    roughness: 0.9,
+  });
   const groundMesh = new THREE.Mesh(new THREE.PlaneGeometry(380, 380), urbanConcreteMat);
   groundMesh.rotation.x = -Math.PI / 2;
   groundMesh.receiveShadow = true;
@@ -337,49 +362,623 @@ export function buildStationWorld(
     });
   });
 
-  // 2. Railway Ballast, Sleepers & Steel Rails Helper (Tracks 1-2 active at Level 1)
-  const ballastPair = createBallastTexturePair(maxAnisotropy);
-  const ballastMat = new THREE.MeshStandardMaterial({
-    map: ballastPair.map,
-    bumpMap: ballastPair.bumpMap,
-    bumpScale: 0.045,
-    color: 0xffffff,
-    roughness: 0.95,
-  });
-  const sleeperMat = new THREE.MeshStandardMaterial({ color: 0x4d3423, roughness: 0.88 });
-  const railMat = new THREE.MeshStandardMaterial({ color: 0xa2abb5, roughness: 0.22, metalness: 0.88 });
-
-  const buildTrackAssembly = (tz: number, targetGroup: THREE.Group) => {
-    const ballast = new THREE.Mesh(new THREE.BoxGeometry(224, 0.12, 3.2), ballastMat);
-    ballast.position.set(0, 0.06, tz);
-    ballast.receiveShadow = true;
-    targetGroup.add(ballast);
-
-    [-0.72, 0.72].forEach((rz) => {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(224, 0.11, 0.1), railMat);
-      rail.position.set(0, 0.21, tz + rz);
-      targetGroup.add(rail);
-    });
-
-    const sleeperSpacing = 0.9;
-    const count = Math.floor(200 / sleeperSpacing);
-    const sleeperInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.28, 0.1, 2.35), sleeperMat, count);
-    sleeperInst.receiveShadow = true;
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < count; i++) {
-      dummy.position.set(-100 + i * sleeperSpacing, 0.12, tz);
-      dummy.rotation.set(0, 0, 0);
-      dummy.scale.set(1, 1, 1);
-      dummy.updateMatrix();
-      sleeperInst.setMatrixAt(i, dummy.matrix);
+  // 2. Railway Ballast Berms (Segmented Texture Variants), Sub-Ballast Yard, Weathered/Rusted Sleepers & Fasteners
+  const ballastMatCache = new Map<string, THREE.MeshStandardMaterial>();
+  const getBallastMaterial = (variant: BallastVariant, repeatX: number) => {
+    const key = `${variant}_${repeatX}`;
+    let mat = ballastMatCache.get(key);
+    if (!mat) {
+      const pair = createBallastVariantTexturePair(variant, repeatX, maxAnisotropy);
+      mat = new THREE.MeshStandardMaterial({
+        map: pair.map,
+        bumpMap: pair.bumpMap,
+        bumpScale: 0.06,
+        color: 0xffffff,
+        roughness: variant === 'station_oiled' ? 0.88 : 0.95,
+      });
+      ballastMatCache.set(key, mat);
     }
-    sleeperInst.instanceMatrix.needsUpdate = true;
-    sleeperInst.computeBoundingSphere();
-    targetGroup.add(sleeperInst);
+    return mat;
+  };
+  const yardGroundPair = createTrackYardGroundTexturePair(maxAnisotropy);
+  const yardGroundMat = new THREE.MeshStandardMaterial({
+    map: yardGroundPair.map,
+    bumpMap: yardGroundPair.bumpMap,
+    bumpScale: 0.035,
+    color: 0xffffff,
+    roughness: 0.94,
+  });
+  const sleeperPair = createSleeperTexturePair(maxAnisotropy);
+  const sleeperMat = new THREE.MeshStandardMaterial({
+    map: sleeperPair.map,
+    bumpMap: sleeperPair.bumpMap,
+    bumpScale: 0.042,
+    color: 0xffffff,
+    roughness: 0.9,
+  });
+  const discardedSleeperMat = new THREE.MeshStandardMaterial({
+    map: sleeperPair.map,
+    bumpMap: sleeperPair.bumpMap,
+    bumpScale: 0.042,
+    color: 0x70412b,
+    roughness: 0.92,
+  });
+  const clipMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.56, metalness: 0.28 });
+  const railWebMat = new THREE.MeshStandardMaterial({ color: 0x573b2d, roughness: 0.72, metalness: 0.22 });
+  const railHeadMat = new THREE.MeshStandardMaterial({ color: 0xc4cdd6, roughness: 0.25, metalness: 0.28 });
+
+  // Custom trapezoidal crushed-stone ballast berm geometry parameterized by segment length
+  const createBallastBermGeometry = (lengthX: number): THREE.BufferGeometry => {
+    const xSegs = Math.max(4, Math.round(lengthX / 16));
+    const profile: [number, number, number][] = [
+      [-2.35, 0.015, 0.0],
+      [-1.32, 0.105, 0.25],
+      [1.32, 0.105, 0.75],
+      [2.35, 0.015, 1.0],
+    ];
+    const cols = profile.length;
+    const rows = xSegs + 1;
+    const positions = new Float32Array(rows * cols * 3);
+    const uvs = new Float32Array(rows * cols * 2);
+    const indices: number[] = [];
+
+    for (let r = 0; r < rows; r++) {
+      const t = r / xSegs;
+      const x = -lengthX / 2 + t * lengthX;
+      for (let c = 0; c < cols; c++) {
+        const [pz, py, pv] = profile[c];
+        const idx = r * cols + c;
+        positions[idx * 3] = x;
+        positions[idx * 3 + 1] = py;
+        positions[idx * 3 + 2] = pz;
+        uvs[idx * 2] = t;
+        uvs[idx * 2 + 1] = pv;
+      }
+    }
+
+    for (let r = 0; r < xSegs; r++) {
+      for (let c = 0; c < cols - 1; c++) {
+        const a = r * cols + c;
+        const b = r * cols + (c + 1);
+        const cIdx = (r + 1) * cols + c;
+        const d = (r + 1) * cols + (c + 1);
+        indices.push(a, b, cIdx);
+        indices.push(b, d, cIdx);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  };
+  const ballastBermGeoCache = new Map<number, THREE.BufferGeometry>();
+  const getBallastBermGeometry = (lengthX: number) => {
+    let geo = ballastBermGeoCache.get(lengthX);
+    if (!geo) {
+      geo = createBallastBermGeometry(lengthX);
+      ballastBermGeoCache.set(lengthX, geo);
+    }
+    return geo;
+  };
+  const sharedSleeperGeo = new THREE.BoxGeometry(0.28, 0.09, 2.38);
+  const sharedClipGeo = new THREE.BoxGeometry(0.18, 0.035, 0.22);
+  const sharedRailWebGeo = new THREE.BoxGeometry(224, 0.075, 0.125);
+  const sharedRailHeadGeo = new THREE.BoxGeometry(224, 0.045, 0.082);
+  const sharedLowWeedGeo = createOvergrownWeedClusterGeometry(false);
+  const sharedTallWeedGeo = createOvergrownWeedClusterGeometry(true);
+  const weedMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.85,
+    side: THREE.DoubleSide,
+  });
+  const sharedCobbleGeo = new THREE.DodecahedronGeometry(0.088, 0);
+  const cobbleMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92 });
+
+  const buildSubBallastApron = (centerZ: number, widthZ: number, targetGroup: THREE.Group) => {
+    const apron = new THREE.Mesh(new THREE.PlaneGeometry(224, widthZ), yardGroundMat);
+    apron.rotation.x = -Math.PI / 2;
+    apron.position.set(0, 0.022, centerZ);
+    apron.receiveShadow = true;
+    targetGroup.add(apron);
   };
 
-  buildTrackAssembly(TRACK_Z[1], scene as unknown as THREE.Group);
-  buildTrackAssembly(TRACK_Z[2], scene as unknown as THREE.Group);
+  const ductConcreteMat = new THREE.MeshStandardMaterial({ color: 0x737980, roughness: 0.86 });
+  const ductLidYellowMat = new THREE.MeshStandardMaterial({ color: 0xd8a228, roughness: 0.54 });
+  const ductLidSlateMat = new THREE.MeshStandardMaterial({ color: 0x525860, roughness: 0.72 });
+  const vergeCurbMat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.84 });
+
+  // Precast cable trough + alternating inspection lids + dwarf shunt signals along paired track medians
+  const buildInterTrackMedianDetails = (
+    centerZ: number,
+    targetGroup: THREE.Group,
+    includeSwitchGaps: boolean,
+  ) => {
+    const segments: [number, number][] = includeSwitchGaps
+      ? [
+          [-98, -42],
+          [-30, 14.8],
+          [22.2, 27.5],
+          [47.0, 98],
+        ]
+      : [
+          [-98, 14.8],
+          [22.2, 37.2],
+          [47.0, 98],
+        ];
+
+    const lidStep = 1.6;
+    const lidYellowTransforms: [number, number][] = [];
+    const lidSlateTransforms: [number, number][] = [];
+
+    segments.forEach(([sx, ex]) => {
+      const len = ex - sx;
+      if (len < 2) return;
+      const midX = (sx + ex) * 0.5;
+      const baseTrough = new THREE.Mesh(new THREE.BoxGeometry(len, 0.06, 0.62), ductConcreteMat);
+      baseTrough.position.set(midX, 0.045, centerZ);
+      baseTrough.receiveShadow = true;
+      targetGroup.add(baseTrough);
+
+      let toggle = 0;
+      for (let lx = sx + 0.8; lx <= ex - 0.8; lx += lidStep) {
+        if (toggle % 4 === 0) {
+          lidYellowTransforms.push([lx, centerZ]);
+        } else {
+          lidSlateTransforms.push([lx, centerZ]);
+        }
+        toggle++;
+      }
+    });
+
+    const lidGeo = new THREE.BoxGeometry(1.42, 0.03, 0.48);
+    const dummy = new THREE.Object3D();
+    if (lidYellowTransforms.length > 0) {
+      const instY = new THREE.InstancedMesh(lidGeo, ductLidYellowMat, lidYellowTransforms.length);
+      lidYellowTransforms.forEach(([lx, lz], idx) => {
+        dummy.position.set(lx, 0.088, lz);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        instY.setMatrixAt(idx, dummy.matrix);
+      });
+      instY.instanceMatrix.needsUpdate = true;
+      instY.computeBoundingSphere();
+      targetGroup.add(instY);
+    }
+    if (lidSlateTransforms.length > 0) {
+      const instS = new THREE.InstancedMesh(lidGeo, ductLidSlateMat, lidSlateTransforms.length);
+      lidSlateTransforms.forEach(([lx, lz], idx) => {
+        dummy.position.set(lx, 0.088, lz);
+        dummy.rotation.set(0, 0, 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        instS.setMatrixAt(idx, dummy.matrix);
+      });
+      instS.instanceMatrix.needsUpdate = true;
+      instS.computeBoundingSphere();
+      targetGroup.add(instS);
+    }
+
+    const shuntXs = includeSwitchGaps ? [-28.5, -10.0, 9.5, 25.5, 49.0] : [-28.5, 9.5, 27.0, 49.0];
+    shuntXs.forEach((dx, idx) => {
+      const shunt = createDwarfShuntSignal(idx % 2 === 0 ? 'green' : 'amber');
+      shunt.position.set(dx, 0.025, centerZ);
+      targetGroup.add(shunt);
+    });
+  };
+
+  // Shared helpers for grassy yard approach strips & instanced railside vegetation
+  const shrubGeo = new THREE.DodecahedronGeometry(0.46, 0);
+  const shrubMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86 });
+  const reedGeo = new THREE.ConeGeometry(0.18, 0.72, 5);
+  const reedMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 });
+  const equipmentKeepoutPoints: { x: number; z: number; r: number }[] = [
+    { x: 36.8, z: -7.2, r: 2.3 }, // East level crossing cabin
+  ];
+  const isClearOfEquipment = (x: number, z: number): boolean => {
+    for (let k = 0; k < equipmentKeepoutPoints.length; k++) {
+      const pt = equipmentKeepoutPoints[k];
+      if (Math.hypot(x - pt.x, z - pt.z) < pt.r) return false;
+    }
+    return true;
+  };
+
+  const populateTracksideGreenery = (
+    targetGroup: THREE.Group,
+    strips: { minX: number; maxX: number; minZ: number; maxZ: number }[],
+    seedBias: number,
+  ) => {
+    const shrubSpots: { x: number; z: number; s: number; rot: number; col: number }[] = [];
+    const reedSpots: { x: number; z: number; s: number; rot: number; col: number }[] = [];
+    const shrubPalette = [0x2d7a36, 0x3b8c32, 0x4b993f, 0x26692d, 0x568d38];
+    const reedPalette = [0x6e9e42, 0x89aa4c, 0x588738, 0xa2b360];
+
+    strips.forEach((st, stIdx) => {
+      const w = st.maxX - st.minX;
+      const d = st.maxZ - st.minZ;
+      if (w < 1 || d < 0.8) return;
+      const midX = (st.minX + st.maxX) * 0.5;
+      const midZ = (st.minZ + st.maxZ) * 0.5;
+
+      const turf = new THREE.Mesh(new THREE.PlaneGeometry(w, d), medianTurfMat);
+      turf.rotation.x = -Math.PI / 2;
+      turf.position.set(midX, 0.026, midZ);
+      turf.receiveShadow = true;
+      targetGroup.add(turf);
+
+      // Clean precast concrete curb separating sub-ballast and green verge
+      if (d > 2.2) {
+        const curbN = new THREE.Mesh(new THREE.BoxGeometry(w, 0.1, 0.18), vergeCurbMat);
+        curbN.position.set(midX, 0.05, st.minZ + 0.09);
+        const curbS = new THREE.Mesh(new THREE.BoxGeometry(w, 0.1, 0.18), vergeCurbMat);
+        curbS.position.set(midX, 0.05, st.maxZ - 0.09);
+        targetGroup.add(curbN, curbS);
+      }
+
+      let idx = 0;
+      for (let x = st.minX + 1.4; x <= st.maxX - 1.4; x += 2.6) {
+        // Keep West & East Flyover zones (x = -61..-51 and 51..61) tidy
+        if (Math.abs(Math.abs(x) - 56) < 4.8) {
+          idx++;
+          continue;
+        }
+        const hash = Math.abs(Math.sin(x * 12.9898 + midZ * 78.233 + seedBias * 41.1 + stIdx));
+        const zJitter = (hash - 0.5) * Math.max(0.4, d - 1.4);
+        const sx = x;
+        const sz = midZ + zJitter;
+        if (idx % 2 === 0 && isClearOfEquipment(sx, sz)) {
+          shrubSpots.push({
+            x: sx,
+            z: sz,
+            s: 0.72 + (hash % 0.55),
+            rot: hash * Math.PI * 2,
+            col: shrubPalette[(idx + stIdx) % shrubPalette.length],
+          });
+        }
+        const rx = x + 0.85;
+        const rz = midZ - zJitter * 0.7;
+        if (isClearOfEquipment(rx, rz)) {
+          reedSpots.push({
+            x: rx,
+            z: rz,
+            s: 0.8 + (hash % 0.6),
+            rot: hash * Math.PI,
+            col: reedPalette[(idx + stIdx) % reedPalette.length],
+          });
+        }
+        idx++;
+      }
+    });
+
+    const dummy = new THREE.Object3D();
+    const tmpCol = new THREE.Color();
+
+    if (shrubSpots.length > 0) {
+      const shrubInst = new THREE.InstancedMesh(shrubGeo, shrubMat, shrubSpots.length);
+      shrubSpots.forEach((sp, i) => {
+        dummy.position.set(sp.x, 0.28 * sp.s, sp.z);
+        dummy.rotation.set(0, sp.rot, 0);
+        dummy.scale.set(sp.s * 1.15, sp.s * 0.82, sp.s * 1.05);
+        dummy.updateMatrix();
+        shrubInst.setMatrixAt(i, dummy.matrix);
+        shrubInst.setColorAt(i, tmpCol.setHex(sp.col));
+      });
+      shrubInst.instanceMatrix.needsUpdate = true;
+      if (shrubInst.instanceColor) shrubInst.instanceColor.needsUpdate = true;
+      shrubInst.computeBoundingSphere();
+      targetGroup.add(shrubInst);
+    }
+
+    if (reedSpots.length > 0) {
+      const reedInst = new THREE.InstancedMesh(reedGeo, reedMat, reedSpots.length);
+      reedSpots.forEach((sp, i) => {
+        dummy.position.set(sp.x, 0.34 * sp.s, sp.z);
+        dummy.rotation.set(0.08, sp.rot, 0.06);
+        dummy.scale.set(sp.s, sp.s * 1.1, sp.s);
+        dummy.updateMatrix();
+        reedInst.setMatrixAt(i, dummy.matrix);
+        reedInst.setColorAt(i, tmpCol.setHex(sp.col));
+      });
+      reedInst.instanceMatrix.needsUpdate = true;
+      if (reedInst.instanceColor) reedInst.instanceColor.needsUpdate = true;
+      reedInst.computeBoundingSphere();
+      targetGroup.add(reedInst);
+    }
+  };
+
+  const buildTrackAssembly = (trackId: TrackId, targetGroup: THREE.Group) => {
+    const tz = TRACK_Z[trackId];
+    const segments = getTrackBallastSegments(trackId);
+    segments.forEach((seg) => {
+      const ballast = new THREE.Mesh(
+        getBallastBermGeometry(seg.lengthX),
+        getBallastMaterial(seg.variant, seg.repeatX),
+      );
+      ballast.position.set(seg.centerX, 0, tz);
+      ballast.receiveShadow = true;
+      targetGroup.add(ballast);
+    });
+
+    [-0.72, 0.72].forEach((rz) => {
+      const railWeb = new THREE.Mesh(sharedRailWebGeo, railWebMat);
+      railWeb.position.set(0, 0.185, tz + rz);
+      const railHead = new THREE.Mesh(sharedRailHeadGeo, railHeadMat);
+      railHead.position.set(0, 0.242, tz + rz);
+      targetGroup.add(railWeb, railHead);
+    });
+
+    const sleeperSpacing = 0.86;
+    const count = Math.floor(204 / sleeperSpacing);
+    const sleeperInst = new THREE.InstancedMesh(sharedSleeperGeo, sleeperMat, count);
+    sleeperInst.receiveShadow = true;
+    const clipInst = new THREE.InstancedMesh(sharedClipGeo, clipMat, count * 2);
+    const dummy = new THREE.Object3D();
+    const tmpCol = new THREE.Color();
+
+    for (let i = 0; i < count; i++) {
+      const sx = -102 + i * sleeperSpacing;
+      const wear = computeSleeperInstanceProps(trackId, sx, i);
+
+      dummy.position.set(sx, 0.125, tz + wear.zJitter);
+      dummy.rotation.set(0, wear.yawJitter, 0);
+      dummy.scale.set(1, wear.scaleY, 1);
+      dummy.updateMatrix();
+      sleeperInst.setMatrixAt(i, dummy.matrix);
+      sleeperInst.setColorAt(i, tmpCol.setHex(wear.sleeperHex));
+
+      dummy.position.set(sx, 0.172, tz - 0.72);
+      dummy.rotation.set(0, wear.yawJitter * 0.5, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      clipInst.setMatrixAt(i * 2, dummy.matrix);
+      clipInst.setColorAt(i * 2, tmpCol.setHex(wear.clipHex));
+
+      dummy.position.set(sx, 0.172, tz + 0.72);
+      dummy.updateMatrix();
+      clipInst.setMatrixAt(i * 2 + 1, dummy.matrix);
+      clipInst.setColorAt(i * 2 + 1, tmpCol.setHex(wear.clipHex));
+    }
+    sleeperInst.instanceMatrix.needsUpdate = true;
+    if (sleeperInst.instanceColor) sleeperInst.instanceColor.needsUpdate = true;
+    sleeperInst.computeBoundingSphere();
+
+    clipInst.instanceMatrix.needsUpdate = true;
+    if (clipInst.instanceColor) clipInst.instanceColor.needsUpdate = true;
+    clipInst.computeBoundingSphere();
+    targetGroup.add(sleeperInst, clipInst);
+  };
+
+  // Scattered crushed shoulder cobbles, overgrown track-edge weeds & discarded rusted sleepers
+  const decorateTrackCorridor = (trackId: TrackId, targetGroup: THREE.Group) => {
+    const tz = TRACK_Z[trackId];
+    const dummy = new THREE.Object3D();
+    const tmpCol = new THREE.Color();
+
+    const cobbles = generateTrackShoulderCobbles(trackId).filter((c) => isClearOfEquipment(c.x, c.z));
+    if (cobbles.length > 0) {
+      const cobbleInst = new THREE.InstancedMesh(sharedCobbleGeo, cobbleMat, cobbles.length);
+      cobbleInst.receiveShadow = true;
+      cobbles.forEach((c, idx) => {
+        const dist = Math.abs(c.z - tz);
+        const bermY = dist >= 2.35 ? 0.022 : 0.105 - ((dist - 1.32) / 1.03) * 0.09;
+        dummy.position.set(c.x, bermY + 0.012, c.z);
+        dummy.rotation.set(c.pitch, c.yaw, 0);
+        dummy.scale.set(c.sx, c.sy, c.sz);
+        dummy.updateMatrix();
+        cobbleInst.setMatrixAt(idx, dummy.matrix);
+        cobbleInst.setColorAt(idx, tmpCol.setHex(c.colorHex));
+      });
+      cobbleInst.instanceMatrix.needsUpdate = true;
+      if (cobbleInst.instanceColor) cobbleInst.instanceColor.needsUpdate = true;
+      cobbleInst.computeBoundingSphere();
+      targetGroup.add(cobbleInst);
+    }
+
+    const weeds = generateTrackEdgeWeedPlacements(trackId).filter((w) => isClearOfEquipment(w.x, w.z));
+    const lowWeeds = weeds.filter((w) => !w.tall);
+    const tallWeeds = weeds.filter((w) => w.tall);
+
+    const spawnWeedBatch = (batch: typeof weeds, geo: THREE.BufferGeometry) => {
+      if (batch.length === 0) return;
+      const inst = new THREE.InstancedMesh(geo, weedMat, batch.length);
+      batch.forEach((w, idx) => {
+        const dist = Math.abs(w.z - tz);
+        const groundY = dist >= 2.35 ? 0.022 : 0.105 - ((dist - 1.32) / 1.03) * 0.09;
+        dummy.position.set(w.x, Math.max(0.012, groundY - 0.012), w.z);
+        dummy.rotation.set(w.tiltX, w.yaw, w.tiltZ);
+        dummy.scale.set(w.scale, w.scale, w.scale);
+        dummy.updateMatrix();
+        inst.setMatrixAt(idx, dummy.matrix);
+        inst.setColorAt(idx, tmpCol.setHex(w.colorHex));
+      });
+      inst.instanceMatrix.needsUpdate = true;
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      inst.computeBoundingSphere();
+      targetGroup.add(inst);
+    };
+
+    spawnWeedBatch(lowWeeds, sharedLowWeedGeo);
+    spawnWeedBatch(tallWeeds, sharedTallWeedGeo);
+
+    getDiscardedSleeperPlacements(trackId).forEach((spec) => {
+      if (!isClearOfEquipment(spec.x, spec.z)) return;
+      const pile = createDiscardedRustedSleeperCluster(discardedSleeperMat, spec.count);
+      pile.position.set(spec.x, 0.018, spec.z);
+      pile.rotation.y = spec.yaw;
+      targetGroup.add(pile);
+    });
+  };
+
+  buildSubBallastApron(0.0, 9.8, scene as unknown as THREE.Group);
+  buildTrackAssembly(1, scene as unknown as THREE.Group);
+  buildTrackAssembly(2, scene as unknown as THREE.Group);
+  buildInterTrackMedianDetails(0.0, scene as unknown as THREE.Group, true);
+
+  // Overhead Steel Signal & Route Gantries spanning Tracks 1 & 2
+  [
+    { x: -43.5, bn: 'ঢাকা · চট্টগ্রাম মেইন লাইন', en: 'WEST APPROACH · TRACK 1-2' },
+    { x: 48.5, bn: 'যাত্রা ও প্রস্থান গ্যান্ট্রি', en: 'EAST THROAT · TRACK 1-2' },
+    { x: -72.0, bn: 'আউটার সিগন্যাল ব্লক', en: 'OUTER BLOCK WEST' },
+    { x: 72.0, bn: 'পূর্ব জংশন ব্লক', en: 'OUTER BLOCK EAST' },
+  ].forEach(({ x, bn, en }, idx) => {
+    const gantry = createSignalGantryBridge(10.6, [-3.0, 3.0], bn, en, maxAnisotropy);
+    gantry.position.set(x, 0, 0);
+    scene.add(gantry);
+    equipmentKeepoutPoints.push({ x, z: -5.3, r: 1.5 }, { x, z: 5.3, r: 1.5 });
+    if (Math.abs(x) <= 72) {
+      baseColliders.push(
+        { id: `gantry12_n_${idx}`, minX: x - 0.6, maxX: x + 0.6, minZ: -5.85, maxZ: -4.75 },
+        { id: `gantry12_s_${idx}`, minX: x - 0.6, maxX: x + 0.6, minZ: 4.75, maxZ: 5.85 },
+      );
+    }
+  });
+
+  // High-mast Yard Floodlight Towers (responsive to dawn/night & power outages)
+  const yardMastCoords: [number, number, number][] = [
+    [-47.5, -7.2, -Math.PI / 2],
+    [-68.0, -7.2, -Math.PI / 2],
+    [49.5, -7.2, -Math.PI / 2],
+    [70.0, -7.2, -Math.PI / 2],
+    [-35.0, 7.6, Math.PI / 2],
+    [-66.0, 7.6, Math.PI / 2],
+    [35.0, 7.6, Math.PI / 2],
+    [66.0, 7.6, Math.PI / 2],
+  ];
+  yardMastCoords.forEach(([mx, mz, rot], idx) => {
+    const mast = createYardFloodlightMast(streetBulbMat);
+    mast.position.set(mx, 0, mz);
+    mast.rotation.y = rot;
+    scene.add(mast);
+    equipmentKeepoutPoints.push({ x: mx, z: mz, r: 1.7 });
+    baseColliders.push({
+      id: `yard_mast_${idx}`,
+      minX: mx - 0.55,
+      maxX: mx + 0.55,
+      minZ: mz - 0.55,
+      maxZ: mz + 0.55,
+    });
+  });
+
+  // Trackside Relay Equipment Cabinets, KM/Whistle Posts & Reserve Sleeper Stacks
+  const relayCoords: [number, number, number][] = [
+    [-34.2, -7.2, 0],
+    [-48.5, 7.2, Math.PI],
+    [34.2, 7.2, Math.PI],
+    [49.5, -7.2, 0],
+    [-64.5, 7.2, Math.PI],
+  ];
+  relayCoords.forEach(([rx, rz, rot], idx) => {
+    const cab = createRelayEquipmentCabinet();
+    cab.position.set(rx, 0, rz);
+    cab.rotation.y = rot;
+    scene.add(cab);
+    equipmentKeepoutPoints.push({ x: rx, z: rz, r: 1.8 });
+    baseColliders.push({
+      id: `relay_cab_${idx}`,
+      minX: rx - 0.85,
+      maxX: rx + 0.85,
+      minZ: rz - 0.65,
+      maxZ: rz + 0.65,
+    });
+  });
+
+  const kmPostSpecs: [string, string, number, number][] = [
+    ['KM 172', 'ঢাকা', -36.5, -5.6],
+    ['W / সিটি', 'HORN', -63.0, -5.6],
+    ['KM 173', 'শাপলা', 34.8, 5.6],
+    ['W / সিটি', 'HORN', 63.0, 5.6],
+  ];
+  kmPostSpecs.forEach(([topT, botT, kx, kz], idx) => {
+    const kmPost = createKilometerMarkerPost(topT, botT, maxAnisotropy);
+    kmPost.position.set(kx, 0, kz);
+    scene.add(kmPost);
+    equipmentKeepoutPoints.push({ x: kx, z: kz, r: 1.3 });
+    baseColliders.push({
+      id: `km_post_${idx}`,
+      minX: kx - 0.35,
+      maxX: kx + 0.35,
+      minZ: kz - 0.35,
+      maxZ: kz + 0.35,
+    });
+  });
+
+  const sleeperStackCoords: [number, number, number][] = [
+    [-45.5, -9.2, 0],
+    [49.5, 8.6, Math.PI],
+    [-66.5, 8.4, 0],
+    [66.5, -8.8, Math.PI],
+  ];
+  sleeperStackCoords.forEach(([sx, sz, rot], idx) => {
+    const stack = createReserveSleeperStack();
+    stack.position.set(sx, 0, sz);
+    stack.rotation.y = rot;
+    scene.add(stack);
+    equipmentKeepoutPoints.push({ x: sx, z: sz, r: 2.3 });
+    baseColliders.push({
+      id: `sleeper_stack_${idx}`,
+      minX: sx - 1.75,
+      maxX: sx + 1.75,
+      minZ: sz - 1.25,
+      maxZ: sz + 1.25,
+    });
+  });
+
+  // Track 1-2 ballast shoulder cobbles, overgrown edge weeds & discarded rusted sleepers (after keepouts)
+  decorateTrackCorridor(1, scene as unknown as THREE.Group);
+  decorateTrackCorridor(2, scene as unknown as THREE.Group);
+
+  // Beautify empty West & East Approach Verges around Tracks 1-2 (after equipment keepouts registered)
+  populateTracksideGreenery(
+    scene as unknown as THREE.Group,
+    [
+      // North Track 1 Outer Verge (west & east of Platform 1 ramps, strictly clear of crossing hut)
+      { minX: -102, maxX: -34.5, minZ: -11.4, maxZ: -5.0 },
+      { minX: 34.5, maxX: 37.8, minZ: -11.6, maxZ: -9.1 },
+      { minX: 46.5, maxX: 102, minZ: -11.4, maxZ: -5.0 },
+      // South Track 2 Verge (west & east of Platform 2 ramps, seamless to sub-ballast)
+      { minX: -102, maxX: -32.8, minZ: 5.0, maxZ: 10.6 },
+      { minX: 32.8, maxX: 37.6, minZ: 5.0, maxZ: 10.6 },
+      { minX: 46.5, maxX: 102, minZ: 5.0, maxZ: 10.6 },
+      // Far West & East Park Corners north of Track 1 behind forecourt ends
+      { minX: -102, maxX: -41.5, minZ: -24.0, maxZ: -12.0 },
+      { minX: 46.5, maxX: 102, minZ: -24.0, maxZ: -12.0 },
+    ],
+    1,
+  );
+
+  // Tropical Banana Clumps & Palms framing the outer West/East rail approaches
+  [
+    [-48, -10.2],
+    [-64, -10.4],
+    [-76, -9.8],
+    [50, -10.2],
+    [65, -10.4],
+    [78, -9.8],
+    [-45, 9.0],
+    [-63, 9.2],
+    [51, 9.0],
+    [65, 9.2],
+  ].forEach(([bx, bz], idx) => {
+    const clump = createBananaClump();
+    clump.position.set(bx, 0, bz);
+    clump.rotation.y = idx * 1.1;
+    scene.add(clump);
+  });
+
+  [
+    [-48, -17.5, 7.6],
+    [-68, -16.5, 8.2],
+    [50, -17.5, 7.8],
+    [68, -16.5, 8.4],
+  ].forEach(([px, pz, h], idx) => {
+    const palm = createCoconutPalm(h);
+    palm.position.set(px, 0, pz);
+    palm.rotation.y = idx * 1.4;
+    scene.add(palm);
+  });
 
   // 3. Detailed Railway Platforms
   const platPair = createPlatformTileTexturePair(maxAnisotropy);
@@ -970,7 +1569,9 @@ export function buildStationWorld(
   // --- Module 3 (Level 2 -> Track 3 @ z=13.3) ---
   {
     const g = moduleGroups[3];
-    buildTrackAssembly(TRACK_Z[3], g);
+    buildSubBallastApron(13.4, 5.6, g);
+    buildTrackAssembly(3, g);
+    decorateTrackCorridor(3, g);
     const southCurb = new THREE.Mesh(new THREE.BoxGeometry(56, 0.04, 0.32), curbYellowMat);
     southCurb.position.set(0, PLATFORM_HEIGHT + 0.01, 11.34);
     g.add(southCurb);
@@ -1005,7 +1606,63 @@ export function buildStationWorld(
   // --- Module 4 (Level 3 -> Track 4 @ z=19.3 & Island Platform 3 @ z=21..28) ---
   {
     const g = moduleGroups[4];
-    buildTrackAssembly(TRACK_Z[4], g);
+    buildSubBallastApron(18.7, 5.0, g);
+    buildTrackAssembly(4, g);
+    buildInterTrackMedianDetails(16.3, g, false);
+    const relay34 = createRelayEquipmentCabinet();
+    relay34.position.set(-34.5, 0, 24.4);
+    const stack34 = createReserveSleeperStack();
+    stack34.position.set(49.5, 0, 24.6);
+    const mast34W = createYardFloodlightMast(streetBulbMat);
+    mast34W.position.set(-60.0, 0, 24.5);
+    mast34W.rotation.y = Math.PI / 2;
+    const mast34E = createYardFloodlightMast(streetBulbMat);
+    mast34E.position.set(60.0, 0, 24.5);
+    mast34E.rotation.y = Math.PI / 2;
+    const km34W = createKilometerMarkerPost('KM 172', 'লুপ ৩-৪', maxAnisotropy);
+    km34W.position.set(-36.5, 0, 21.8);
+    const km34E = createKilometerMarkerPost('W / সিটি', 'HORN', maxAnisotropy);
+    km34E.position.set(49.0, 0, 21.8);
+    g.add(relay34, stack34, mast34W, mast34E, km34W, km34E);
+    equipmentKeepoutPoints.push(
+      { x: -34.5, z: 24.4, r: 1.8 },
+      { x: 49.5, z: 24.6, r: 2.3 },
+      { x: -60.0, z: 24.5, r: 1.7 },
+      { x: 60.0, z: 24.5, r: 1.7 },
+      { x: -36.5, z: 21.8, r: 1.3 },
+      { x: 49.0, z: 21.8, r: 1.3 },
+      { x: -43.5, z: 21.6, r: 1.5 },
+      { x: 48.5, z: 21.6, r: 1.5 },
+    );
+    decorateTrackCorridor(4, g);
+    [
+      [-48, 25.0],
+      [-64, 25.0],
+      [51, 25.0],
+      [66, 25.0],
+    ].forEach(([bx, bz], idx) => {
+      const clump = createBananaClump();
+      clump.position.set(bx, 0, bz);
+      clump.rotation.y = idx * 1.2 + 0.4;
+      g.add(clump);
+    });
+    populateTracksideGreenery(
+      g,
+      [
+        { minX: -102, maxX: -32.8, minZ: 21.5, maxZ: 27.6 },
+        { minX: 32.8, maxX: 37.6, minZ: 21.5, maxZ: 27.6 },
+        { minX: 46.5, maxX: 102, minZ: 21.5, maxZ: 27.6 },
+      ],
+      4,
+    );
+    [
+      { x: -43.5, bn: 'প্ল্যাটফর্ম ৩-৪ লুপ লাইন', en: 'WEST THROAT · TRACK 3-4' },
+      { x: 48.5, bn: 'পূর্ব সিগন্যাল গ্যান্ট্রি', en: 'EAST THROAT · TRACK 3-4' },
+    ].forEach(({ x, bn, en }) => {
+      const gantry34 = createSignalGantryBridge(10.6, [-3.0, 3.0], bn, en, maxAnisotropy);
+      gantry34.position.set(x, 0, 16.3);
+      g.add(gantry34);
+    });
     buildPlatformStructure(g, 24.5, 7.0, 56, [21.18], 'none', 0);
 
     const canopy3 = new THREE.Mesh(new THREE.BoxGeometry(28, 0.16, 3.8), canopyMat);
@@ -1106,7 +1763,9 @@ export function buildStationWorld(
   // --- Module 5 (Level 4 -> Track 5 @ z=29.8) ---
   {
     const g = moduleGroups[5];
-    buildTrackAssembly(TRACK_Z[5], g);
+    buildSubBallastApron(30.0, 5.2, g);
+    buildTrackAssembly(5, g);
+    decorateTrackCorridor(5, g);
     const p3SouthCurb = new THREE.Mesh(new THREE.BoxGeometry(56, 0.04, 0.32), curbYellowMat);
     p3SouthCurb.position.set(0, PLATFORM_HEIGHT + 0.01, 27.82);
     g.add(p3SouthCurb);
@@ -1141,7 +1800,31 @@ export function buildStationWorld(
   // --- Module 6 (Level 5 -> Track 6 @ z=35.8 & South Glass Terminal Platform 4 @ z=37.5..46.0) ---
   {
     const g = moduleGroups[6];
-    buildTrackAssembly(TRACK_Z[6], g);
+    buildSubBallastApron(35.2, 5.2, g);
+    buildTrackAssembly(6, g);
+    buildInterTrackMedianDetails(32.8, g, false);
+    equipmentKeepoutPoints.push(
+      { x: -43.5, z: 38.1, r: 1.5 },
+      { x: 48.5, z: 38.1, r: 1.5 },
+    );
+    decorateTrackCorridor(6, g);
+    populateTracksideGreenery(
+      g,
+      [
+        { minX: -102, maxX: -34.5, minZ: 38.4, maxZ: 45.6 },
+        { minX: 34.5, maxX: 37.6, minZ: 38.4, maxZ: 45.6 },
+        { minX: 46.5, maxX: 102, minZ: 38.4, maxZ: 45.6 },
+      ],
+      6,
+    );
+    [
+      { x: -43.5, bn: 'দক্ষিণ করিডোর লাইন ৫-৬', en: 'SOUTH EXPRESS · TRACK 5-6' },
+      { x: 48.5, bn: 'টার্মিনাল প্রবেশ গ্যান্ট্রি', en: 'SOUTH EAST · TRACK 5-6' },
+    ].forEach(({ x, bn, en }) => {
+      const gantry56 = createSignalGantryBridge(10.6, [-3.0, 3.0], bn, en, maxAnisotropy);
+      gantry56.position.set(x, 0, 32.8);
+      g.add(gantry56);
+    });
     buildPlatformStructure(g, 41.75, 8.5, 60, [37.68], 'south', 0);
 
     const southTerminal = createSouthTerminalBuilding(maxAnisotropy, glassFacadeMatB);
@@ -1231,7 +1914,18 @@ export function buildStationWorld(
   // --- Module 7 (Chapter 2 Track 7 @ z=48.8 & Padma Platform 5 @ z=56.5..64.5) ---
   {
     const g = moduleGroups[7];
-    buildTrackAssembly(TRACK_Z[7], g);
+    buildSubBallastApron(48.9, 5.4, g);
+    buildTrackAssembly(7, g);
+    decorateTrackCorridor(7, g);
+    populateTracksideGreenery(
+      g,
+      [
+        { minX: -102, maxX: -34.5, minZ: 57.6, maxZ: 64.2 },
+        { minX: 34.5, maxX: 37.6, minZ: 57.6, maxZ: 64.2 },
+        { minX: 46.5, maxX: 102, minZ: 57.6, maxZ: 64.2 },
+      ],
+      7,
+    );
     buildPlatformStructure(g, 60.5, 8.0, 60, [56.68], 'south', 0);
 
     const p4SouthCurb = new THREE.Mesh(new THREE.BoxGeometry(60, 0.04, 0.32), curbYellowMat);
@@ -1329,7 +2023,10 @@ export function buildStationWorld(
   // --- Module 8 (Chapter 2 Final Tier -> Track 8 @ z=54.8) ---
   {
     const g = moduleGroups[8];
-    buildTrackAssembly(TRACK_Z[8], g);
+    buildSubBallastApron(54.2, 5.2, g);
+    buildTrackAssembly(8, g);
+    buildInterTrackMedianDetails(51.8, g, false);
+    decorateTrackCorridor(8, g);
     addHangingPlatformSign(g, -6, PLATFORM_HEIGHT + 4.1, 57.3, 8);
     addHangingPlatformSign(g, 6, PLATFORM_HEIGHT + 4.1, 57.3, 8);
 
@@ -1355,6 +2052,50 @@ export function buildStationWorld(
     moduleGroups[trackNum].visible = false;
     scene.add(moduleGroups[trackNum]);
   });
+
+  // Landscaped Expansion Greenbelt Buffers for unbuilt southern yard zones (prevents bare grey expanses at L1..L4)
+  const makeExpansionReserveBuffer = (zMin: number, zMax: number, seed: number) => {
+    const buf = new THREE.Group();
+    populateTracksideGreenery(
+      buf,
+      [
+        { minX: -102, maxX: 37.6, minZ: zMin, maxZ: zMax },
+        { minX: 46.5, maxX: 102, minZ: zMin, maxZ: zMax },
+      ],
+      seed,
+    );
+    // Low painted boundary bollards framing the active station edge cleanly
+    const bollardGeo = new THREE.CylinderGeometry(0.11, 0.13, 0.65, 8);
+    const bollardMat = new THREE.MeshStandardMaterial({ color: 0xe6b830, roughness: 0.55 });
+    const bollardXs: number[] = [];
+    for (let x = -34; x <= 34; x += 6.8) {
+      bollardXs.push(x);
+    }
+    const inst = new THREE.InstancedMesh(bollardGeo, bollardMat, bollardXs.length);
+    const dummy = new THREE.Object3D();
+    bollardXs.forEach((bx, idx) => {
+      dummy.position.set(bx, 0.325, zMin + 0.35);
+      dummy.updateMatrix();
+      inst.setMatrixAt(idx, dummy.matrix);
+    });
+    inst.instanceMatrix.needsUpdate = true;
+    inst.computeBoundingSphere();
+    buf.add(inst);
+
+    const midZ = (zMin + zMax) * 0.5;
+    [-46, -18, 12, 52].forEach((bx, idx) => {
+      const clump = createBananaClump();
+      clump.position.set(bx, 0, midZ);
+      clump.rotation.y = idx * 1.3 + seed * 0.5;
+      buf.add(clump);
+    });
+    scene.add(buf);
+    return buf;
+  };
+
+  const expansionBuffer34 = makeExpansionReserveBuffer(14.6, 27.6, 31);
+  const expansionBuffer4Only = makeExpansionReserveBuffer(16.6, 27.6, 41);
+  const expansionBuffer56 = makeExpansionReserveBuffer(28.4, 44.2, 51);
 
   // Animated Tower Cranes for visible construction sequences
   const cranes: ConstructionCraneRig[] = [createConstructionCrane(), createConstructionCrane()];
@@ -1874,6 +2615,10 @@ export function buildStationWorld(
       }
     });
 
+    expansionBuffer34.visible = !isCh2 && unlockedTracks <= 2;
+    expansionBuffer4Only.visible = !isCh2 && unlockedTracks === 3;
+    expansionBuffer56.visible = !isCh2 && unlockedTracks < 5;
+
     if (craneTimer > 0) {
       craneTimer = Math.max(0, craneTimer - dt);
       cranes.forEach((crane, idx) => {
@@ -2328,7 +3073,12 @@ export function buildStationWorld(
         obj.geometry.dispose();
         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
         mats.forEach((m) => {
-          if (m) m.dispose();
+          if (!m) return;
+          const std = m as THREE.MeshStandardMaterial;
+          std.map?.dispose();
+          std.bumpMap?.dispose();
+          std.emissiveMap?.dispose();
+          m.dispose();
         });
       }
     });

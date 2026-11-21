@@ -366,6 +366,125 @@ export function getVipEvacuationPoolForPattern(
   return ['forecourt_w', 'forecourt_c', 'forecourt_e', 'station_entrance'];
 }
 
+export function getVipProtectedPlatforms(
+  vipProtocol: VipSecurityProtocol | null,
+): TrackId[] {
+  if (!vipProtocol?.active) return [];
+  return Array.from(
+    new Set([
+      ...(vipProtocol.designatedPlatforms ?? []),
+      ...vipProtocol.lockedPlatforms,
+    ]),
+  );
+}
+
+export function getVipProtectedPlatformSet(
+  vipProtocol: VipSecurityProtocol | null,
+): Set<TrackId> {
+  return new Set(getVipProtectedPlatforms(vipProtocol).map(normalizeVipPlatformTrack));
+}
+
+function getVipElevatedDestinationPool(
+  vipProtocol: VipSecurityProtocol,
+  unlockedTracks: number,
+): string[] {
+  const protectedList = getVipProtectedPlatforms(vipProtocol);
+  const protectedSet = new Set(protectedList.map(normalizeVipPlatformTrack));
+  const elevatedNodes: string[] = [];
+
+  for (const [trackKey, target] of Object.entries(vipProtocol.platformDensityTargets ?? {})) {
+    if (target !== 'elevated') continue;
+    const tid = Number(trackKey) as TrackId;
+    if (tid > unlockedTracks) continue;
+    if (protectedSet.has(normalizeVipPlatformTrack(tid))) continue;
+    elevatedNodes.push(...platformNavNodeIdsForTrack(tid, unlockedTracks));
+  }
+
+  const patternPool = getVipEvacuationPoolForPattern(
+    vipProtocol.flowPattern,
+    protectedList,
+    unlockedTracks,
+  );
+
+  const combined = Array.from(new Set([...elevatedNodes, ...patternPool])).filter((id) => {
+    const node = getNavNode(id);
+    if (!node || !isNavNodeUnlocked(node, unlockedTracks)) return false;
+    const np = node.platform ? normalizeVipPlatformTrack(node.platform) : null;
+    return !np || !protectedSet.has(np);
+  });
+
+  return combined.length > 0
+    ? combined
+    : ['forecourt_w', 'forecourt_c', 'forecourt_e', 'station_entrance'];
+}
+
+export function applyVipPassengerDensityAdjustment(
+  npcState: NpcSimulationState,
+  vipProtocol: VipSecurityProtocol,
+  unlockedTracks = 2,
+): { evacuatedCount: number; redirectedOverflowCount: number } {
+  if (!vipProtocol.active) {
+    return { evacuatedCount: 0, redirectedOverflowCount: 0 };
+  }
+
+  const protectedSet = getVipProtectedPlatformSet(vipProtocol);
+  const safePool = getVipElevatedDestinationPool(vipProtocol, unlockedTracks);
+  let evacuatedCount = 0;
+  let redirectedOverflowCount = 0;
+
+  for (let i = 0; i < npcState.npcs.length; i++) {
+    const npc = npcState.npcs[i];
+    if (
+      npc.immovable ||
+      npc.assignedMissionId ||
+      npc.incidentKind ||
+      npc.role === 'railway_police' ||
+      npc.role === 'bd_police' ||
+      npc.role === 'child'
+    ) {
+      continue;
+    }
+
+    const plat = getPlatformTrackForPosition(npc.z, npc.y);
+    const onProtectedPlatform = plat !== null && protectedSet.has(plat);
+
+    if (onProtectedPlatform) {
+      npc.waitTimer = 0;
+      npc.memory.boardingStage = 'idle';
+      npc.memory.boardingTrainId = null;
+      npc.memory.targetCoachIndex = null;
+      npc.activity = 'walking';
+      const destId = safePool[i % safePool.length] ?? 'forecourt_c';
+      const currNode = findNearestNavNode(npc.x, npc.y, npc.z, true, unlockedTracks);
+      npc.route = findNavPath(currNode.id, destId, {
+        avoidTrackHazards: false,
+        unlockedTracks,
+      });
+      npc.routeIdx = 0;
+      npc.targetNodeId = destId;
+      evacuatedCount++;
+    } else if (
+      redirectedOverflowCount < 6 &&
+      (!npc.memory.boardingStage || npc.memory.boardingStage === 'idle') &&
+      i % 2 === 0
+    ) {
+      const destId = safePool[(i + redirectedOverflowCount) % safePool.length] ?? 'forecourt_c';
+      const currNode = findNearestNavNode(npc.x, npc.y, npc.z, true, unlockedTracks);
+      npc.waitTimer = 0;
+      npc.activity = 'walking';
+      npc.route = findNavPath(currNode.id, destId, {
+        avoidTrackHazards: true,
+        unlockedTracks,
+      });
+      npc.routeIdx = 0;
+      npc.targetNodeId = destId;
+      redirectedOverflowCount++;
+    }
+  }
+
+  return { evacuatedCount, redirectedOverflowCount };
+}
+
 function getTargetNodeForNpc(
   npc: NpcAgent,
   trainState: TrainSimulationState,
@@ -373,10 +492,7 @@ function getTargetNodeForNpc(
   unlockedTracks = 2,
   vipProtocol: VipSecurityProtocol | null = null,
 ): NavNode {
-  const lockedSet =
-    vipProtocol?.active
-      ? new Set(vipProtocol.lockedPlatforms.map(normalizeVipPlatformTrack))
-      : null;
+  const lockedSet = vipProtocol?.active ? getVipProtectedPlatformSet(vipProtocol) : null;
 
   const pick = (ids: string[]): NavNode => {
     const valid = ids
@@ -442,8 +558,9 @@ function getTargetNodeForNpc(
   }
 
   if (npc.role === 'railway_police' || npc.role === 'bd_police') {
-    if (vipProtocol?.active && vipProtocol.lockedPlatforms.length > 0) {
-      const targetPlat = vipProtocol.lockedPlatforms[seqSeed % vipProtocol.lockedPlatforms.length];
+    const protectedPlats = getVipProtectedPlatforms(vipProtocol);
+    if (vipProtocol?.active && protectedPlats.length > 0) {
+      const targetPlat = protectedPlats[seqSeed % protectedPlats.length];
       return pick(platformNavNodeIdsForTrack(targetPlat, unlockedTracks));
     }
     return pick([
@@ -477,7 +594,7 @@ function getTargetNodeForNpc(
   }
 
   if (vipProtocol?.active) {
-    return pick(getVipEvacuationPoolForPattern(vipProtocol.flowPattern, vipProtocol.lockedPlatforms, unlockedTracks));
+    return pick(getVipElevatedDestinationPool(vipProtocol, unlockedTracks));
   }
 
   // Passengers, Students, Families: follow realistic station routine!
@@ -522,6 +639,7 @@ function getTargetNodeForNpc(
 export function computeTargetCrowdSize(
   simState: StationSimState,
   trainState: TrainSimulationState,
+  vipProtocol: VipSecurityProtocol | null = null,
 ): number {
   const hour = (simState.gameMinutes % 1440) / 60;
   const isRushHour = (hour >= 7 && hour <= 10) || (hour >= 16.5 && hour <= 20);
@@ -537,14 +655,16 @@ export function computeTargetCrowdSize(
     }
   }
 
+  const vipOverflowSurge = vipProtocol?.active ? 3 : 0;
   const expansionBonus = Math.min(6, (unlockedTracks - 2) * 2);
   const base =
     19 +
     (isRushHour ? 3 : 0) +
     (isWeekend ? 2 : 0) +
     expansionBonus +
+    vipOverflowSurge +
     Math.min(6, activeTrainsWeight);
-  return Math.max(20, Math.min(36, base));
+  return Math.max(20, Math.min(38, base));
 }
 
 export function createInitialNpcSimulation(trainState?: TrainSimulationState): NpcSimulationState {
@@ -1381,7 +1501,7 @@ export function stepNpcSimulation(
   };
 
   // 1. Dynamic Crowd Spawning / Despawning + Train Disembarking with Luggage
-  const targetCrowd = computeTargetCrowdSize(nextSimState, trainState);
+  const targetCrowd = computeTargetCrowdSize(nextSimState, trainState, vipProtocol);
   npcState.targetCrowdSize = targetCrowd;
 
   const unlockedTracks = Math.max(2, Math.min(8, nextSimState.unlockedTracks || trainState.unlockedTracks || 2));
@@ -1632,13 +1752,14 @@ export function stepNpcSimulation(
   const missionById = new Map<string, EmergencyMission>();
   for (const m of npcState.missions) missionById.set(m.id, m);
 
-  const activeVipLockedSet =
-    vipProtocol?.active
-      ? new Set(vipProtocol.lockedPlatforms.map(normalizeVipPlatformTrack))
-      : null;
+  const activeVipLockedSet = vipProtocol?.active ? getVipProtectedPlatformSet(vipProtocol) : null;
   const vipSweepSet =
     vipProtocol?.active
-      ? new Set(vipProtocol.sweepOrderedPlatforms.map(normalizeVipPlatformTrack))
+      ? new Set(
+          [...vipProtocol.sweepOrderedPlatforms, ...vipProtocol.lockedPlatforms].map(
+            normalizeVipPlatformTrack,
+          ),
+        )
       : null;
 
   // Track which trains can accept boarding right now and track queued/stepping counts per doorway
@@ -2091,11 +2212,7 @@ export function stepNpcSimulation(
       npc.memory.targetCoachIndex = null;
       npc.activity = 'walking';
 
-      const safePool = getVipEvacuationPoolForPattern(
-        vipProtocol.flowPattern,
-        vipProtocol.lockedPlatforms,
-        unlockedTracks,
-      );
+      const safePool = getVipElevatedDestinationPool(vipProtocol, unlockedTracks);
       const currentTargetNode = npc.targetNodeId ? getNavNode(npc.targetNodeId) : undefined;
       const targetPlatNorm = currentTargetNode?.platform
         ? normalizeVipPlatformTrack(currentTargetNode.platform)
@@ -2634,7 +2751,8 @@ export function stepNpcSimulation(
 
   const vipPlatformCounts: Partial<Record<TrackId, number>> = {};
   if (vipProtocol?.active) {
-    for (const pId of vipProtocol.lockedPlatforms) {
+    const trackedPlatforms = getVipProtectedPlatforms(vipProtocol);
+    for (const pId of trackedPlatforms) {
       vipPlatformCounts[pId] = 0;
     }
     for (let i = 0; i < npcState.npcs.length; i++) {
@@ -2642,7 +2760,7 @@ export function stepNpcSimulation(
       if (n.immovable || n.role === 'railway_police' || n.role === 'bd_police') continue;
       const plat = getPlatformTrackForPosition(n.z, n.y);
       if (plat !== null) {
-        for (const pId of vipProtocol.lockedPlatforms) {
+        for (const pId of trackedPlatforms) {
           if (normalizeVipPlatformTrack(pId) === plat) {
             vipPlatformCounts[pId] = (vipPlatformCounts[pId] ?? 0) + 1;
           }

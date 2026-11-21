@@ -497,7 +497,7 @@ export function GameHUD({
                     className="pt-1 border-t border-[#f59e0b]/30 text-left flex items-center justify-between gap-2 text-[10px] text-[#fca5a5] font-bold cursor-pointer"
                   >
                     <span className="truncate">
-                      VIP SECURITY: Clear P{hud.vipLockedPlatforms.join('/P')}
+                      VIP SECURITY: Secure/Clear P{hud.vipLockedPlatforms.join('/P')}
                     </span>
                     <span className="px-1.5 py-0.2 rounded bg-[#b91c1c] text-white shrink-0">
                       Verify [T]
@@ -685,7 +685,7 @@ export function GameHUD({
                     <span className="flex items-center gap-1.5 truncate font-bold">
                       <Siren className="w-3 h-3 text-[#f87171] shrink-0" />
                       <span className="truncate">
-                        VIP Security: Clear P{hud.vipLockedPlatforms.join('/P')}
+                        VIP Security: Secure/Verify P{hud.vipLockedPlatforms.join('/P')}
                       </span>
                     </span>
                     <span className="px-1.5 py-0.2 rounded bg-[#b91c1c] text-white font-bold shrink-0">
